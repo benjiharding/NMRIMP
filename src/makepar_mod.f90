@@ -27,6 +27,8 @@ contains
       write (99, "(A)") '1                                 - network activation func. (1=sigmoid, 2=tanh, 3=relu, 4=linear)'
       write (99, "(A)") 'nmrwts.out                        - input file with optimzed network weights'
       write (99, "(A)") '40                                - maximum previously simulated nodes'
+      write (99, "(A)") '10000 10000                       - maximum iterations for step 1 and step 2'
+      write (99, "(A)") '0.1 0.01                          - rejection tolerances for step 1 and step 2'
       write (99, "(A)") 'pool.dat                          - file with covariance structs. of Gaussian pool'
       close (99)
 
