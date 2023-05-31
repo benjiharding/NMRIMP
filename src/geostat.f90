@@ -16,13 +16,12 @@ module geostat
    type(network) :: nnet
 
    ! simulation variables
+   real(8), allocatable :: imputed(:, :, :) ! (ndata, nfact, nreals)
    integer :: nsearch
    integer :: nreals
    integer :: rseed
-   real(8) :: radius, radius1, radius2
-   real(8) :: sang1, sang2, sang3
-   real(8) :: sanis1, sanis2
-   real(8) :: srotmat(3, 3)
+   integer :: iter1, iter2
+   real(8) :: tol1, tol2
 
    ! data variables
    real(8), allocatable :: var(:)
@@ -37,6 +36,9 @@ module geostat
    ! Gaussian pool parameters
    integer :: ngvarg
    type(variogram), allocatable :: pool(:)
+
+   ! output file
+   integer :: lout, ldbg
 
 contains
 
