@@ -20,7 +20,7 @@ contains
       character(256) :: outfile
       character(256) :: nnwtsfile
       character(256) :: str
-      integer :: lin, lout, ldbg
+      integer :: lin
       logical :: testfl
       integer :: test, i, j, iv
       integer :: dhcol, xyzcols(3), varcol, wtcol, ncols, numwts
@@ -136,11 +136,12 @@ contains
       ! open the output file and write headers
       open (lout, file=outfile, status="UNKNOWN")
       write (lout, "(A)") "Imputed Data Values"
-      write (lout, "(i1)") 5
+      write (lout, "(i1)") 6
       write (lout, "(A)") "dhid"
       write (lout, "(A)") "x"
       write (lout, "(A)") "y"
       write (lout, "(A)") "z"
+      write (lout, "(A)") "data value"
       write (lout, "(A)") "imputed value"
 
       ! network layers
@@ -180,6 +181,16 @@ contains
       if (test .ne. 0) stop "ERROR in parameter file"
       write (*, *) ' number of previously simulated nodes: ', nsearch
 
+      ! max iterations for imputation steps
+      read (lin, *, iostat=test) iter1, iter2
+      if (test .ne. 0) stop "ERROR in parameter file"
+      write (*, *) ' max iterations for step 1 and 2: ', iter1, iter2
+
+      ! tolerances for imputations steps
+      read (lin, *, iostat=test) tol1, tol2
+      if (test .ne. 0) stop "ERROR in parameter file"
+      write (*, *) ' rejection tolerances for step 1 and 2: ', tol1, tol2
+
       ! Gaussian pool file
       read (lin, '(a256)', iostat=test) poolfile
       if (test .ne. 0) stop "ERROR in parameter file"
@@ -192,7 +203,9 @@ contains
       ! finished reading parameters
       close (lin)
 
+      !
       ! start reading the data file
+      !
       write (*, *) " "
       write (*, *) " reading data file..."
       write (*, *) " "
