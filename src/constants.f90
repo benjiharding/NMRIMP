@@ -3,6 +3,7 @@ module constants
    implicit none
 
    real(8), parameter :: EPSLON = 1e-5
+   real(8), parameter :: IMPEPS = 1e-1
    real(8), parameter :: PI = 4*atan(1.0d0)
    real(8), parameter :: SMALLDBLE = 1d-6
    real(8), parameter :: BIGDBLE = 1d21
