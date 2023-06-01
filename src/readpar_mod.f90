@@ -133,17 +133,6 @@ contains
       call chknam(outfile, 256)
       write (*, "(2a)") '  output file: ', trim(adjustl(outfile))
 
-      ! open the output file and write headers
-      open (lout, file=outfile, status="UNKNOWN")
-      write (lout, "(A)") "Imputed Data Values"
-      write (lout, "(i1)") 6
-      write (lout, "(A)") "dhid"
-      write (lout, "(A)") "x"
-      write (lout, "(A)") "y"
-      write (lout, "(A)") "z"
-      write (lout, "(A)") "data value"
-      write (lout, "(A)") "imputed value"
-
       ! network layers
       read (lin, *, iostat=test) nnet%nl
       if (test .ne. 0) stop "ERROR in parameter file"
@@ -336,6 +325,20 @@ contains
       ngvarg = nnet%ld(1) - 1
       allocate (pool(ngvarg), stat=test)
       if (test .ne. 0) stop "allocation failed due to insufficient memory!"
+
+      ! open the output file and write headers now that we know ngvarg
+      open (lout, file=outfile, status="UNKNOWN")
+      write (lout, "(A)") "Imputed Data Values"
+      write (lout, "(i2)") 6 + ngvarg + 1
+      write (lout, "(A)") "dhid"
+      write (lout, "(A)") "x"
+      write (lout, "(A)") "y"
+      write (lout, "(A)") "z"
+      write (lout, "(A)") "data value"
+      write (lout, "(A)") "imputed value"
+      do iv = 1, ngvarg + 1
+         write (lout, "(a6, i3)") "Factor", iv
+      end do
 
       ! open the pool file
       open (lin, file=poolfile, status='OLD')
