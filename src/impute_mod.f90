@@ -21,9 +21,16 @@ contains
 
       call cpu_time(start)
 
+      write (*, *) " "
+      write (*, *) "Starting imputation..."
+      write (*, *) " "
+
       call nmr_imputer(pool, nreals, nsearch, imputed, iter1, iter2, tol1, tol2)
 
       call cpu_time(finish)
+
+      write (*, *) " "
+      print '("Imputation took ", f5.2, " minutes")', (finish - start)/60
 
    end subroutine impute
 
@@ -52,21 +59,23 @@ contains
       real(8), allocatable :: sim(:, :)
       real(8), allocatable :: anisxyz(:, :)
       integer, allocatable :: isim(:, :), randpath(:)
+      integer, allocatable :: factpath(:)
       real(8) :: zimp1(1), yimp1(1, ngvarg + 1)
       real(8) :: zimp2(1), yimp2(1, ngvarg + 1)
       real(8) :: ztry(1), ytry(1, ngvarg + 1)
-      real(8) :: p, xp, axyz(3)
+      real(8) :: p, xp, gmin, gmax
+      real(8) :: axyz(3)
       integer :: simidx, ierr
       real(8) :: diff1, diff2, pert
       integer :: nfact
 
       ! reference distribution
-      integer, parameter :: nsamp = 100000
-      real(8) :: zref(nsamp)
+      integer, parameter :: nsamp = 1000000
+      real(8) :: zref(nsamp), minref, maxref
       real(8), allocatable :: nsref(:)
 
       ! indexes
-      integer :: i, j, k1, k2, igv, iy, nst, ireal
+      integer :: i, j, k1, k2, igv, iy, fi, nst, ireal
 
       ! allocate arrays based on number of data and max search
       allocate (rhs(nsearch), lhs(nsearch, nsearch), kwts(nsearch))
@@ -78,8 +87,20 @@ contains
 
       ! build reference distribution for transformations
       call build_refcdf(nsamp, zref, nsref)
-      write (*, *) minval(zref), maxval(zref)
-      write (*, *) minval(nsref), maxval(nsref)
+      minref = minval(zref)
+      maxref = maxval(zref)
+      write (*, *) " "
+      write (*, *) "Reference min and max:", minref, maxref
+      write (*, *) "NScore min and max:", minval(nsref), maxval(nsref)
+      write (*, *) " "
+
+      do i = 1, nsamp
+         write (ldbg, "(*(g14.8,1x))") dble(i)/(dble(nsamp) + 1.d0), zref(i), nsref(i)
+      end do
+
+      ! min and max Gaussian values ~ [-5, 5]
+      call gauinv(0.0000001d0, gmin, ierr)
+      call gauinv(0.9999999d0, gmax, ierr)
 
       ! total number of factors, plus one for nugget
       nfact = ngvarg + 1
@@ -107,6 +128,9 @@ contains
       ! main loop over realizations
       !
       REALLOOP: do ireal = 1, nreals
+
+         write (*, *) " "
+         write (*, *) "imputing realization", ireal
 
          ! define random path through nodes
          randpath = [(i, i=1, ndata)]
@@ -193,9 +217,19 @@ contains
 
                ! simulate each factor at this simidx
                do igv = 1, ngvarg
+
                   p = grnd()
                   call gauinv(p, xp, ierr)
                   sim(simidx, igv) = xp*cstdevs(igv) + cmeans(igv)
+
+                  ! enforce reasonable min/max Gaussian values
+                  if (sim(simidx, igv) .lt. gmin) then
+                     sim(simidx, igv) = gmin
+                  end if
+                  if (sim(simidx, igv) .gt. gmax) then
+                     sim(simidx, igv) = gmax
+                  end if
+
                end do
 
                ! simulate nugget
@@ -206,6 +240,10 @@ contains
                ! calculate imputed value
                yimp1 = reshape(sim(simidx, :), shape=[1, nfact]) ! reshape to preserve first dim
                call network_forward(nnet, yimp1, zimp1, .false.)
+
+               if (zimp1(1) .lt. minref) stop "ERROR: data beyond ref min tail"
+               if (zimp1(1) .gt. maxref) stop "ERROR: data beyond ref max tail"
+
                call transform_to_refcdf(zimp1(1), zref, nsref, zimp1(1))
 
                ! get difference with true data value
@@ -213,8 +251,8 @@ contains
 
                ! break if we need to
                if (k1 .ge. iter1) then
-                  write (*, *) "coarse search did not converge after", iter1, &
-                     "iterations at data index", simidx
+                  !   write (*, *) "coarse search did not converge after", iter1, &
+                  !      "iterations at data index", simidx
                   exit
                end if
 
@@ -232,16 +270,33 @@ contains
             yimp2 = yimp1
             ytry = yimp1
 
+            ! random path though the factors
+            factpath = [(fi, fi=1, nfact)]
+            call shuffle(factpath)
+
             k2 = 0
             POLISH: do while (diff2 .gt. tol2)
 
                k2 = k2 + 1
 
-               do iy = 1, nfact
+               do j = 1, nfact
 
-                  ! perturb a factor and calculate new imputed value
-                  pert = -IMPEPS + grnd()*(2*IMPEPS)
+                  iy = j !factpath(j)
+
+                  ! perturb a factor
+                  ! pert = -IMPEPS + grnd()*(IMPEPS - (-IMPEPS))
+                  pert = -tol2 + grnd()*(tol2 - (-tol2))
                   ytry(1, iy) = yimp2(1, iy) + pert
+
+                  ! enforce reasonable min/max Gaussian values
+                  if (ytry(1, iy) .lt. gmin) then
+                     ytry(1, iy) = gmin
+                  end if
+                  if (ytry(1, iy) .gt. gmax) then
+                     ytry(1, iy) = gmax
+                  end if
+
+                  ! calculate the new imputed value
                   call network_forward(nnet, ytry, ztry, .false.)
                   call transform_to_refcdf(ztry(1), zref, nsref, ztry(1))
 
