@@ -125,6 +125,11 @@ contains
       write (*, "(2a)") '  debugging file: ', trim(adjustl(dbgfile))
       if (idbg .gt. 0) then
          open (ldbg, file=dbgfile, status="UNKNOWN")
+         write (ldbg, "(A)") "Reference Distribution"
+         write (ldbg, "(i2)") 3
+         write (ldbg, "(A)") "CDF y"
+         write (ldbg, "(A)") "CDF x"
+         write (ldbg, "(A)") "NS CDF x"
       end if
 
       ! imputation output
