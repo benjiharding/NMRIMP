@@ -71,11 +71,15 @@ contains
 
       ! reference distribution
       integer, parameter :: nsamp = 1000000
-      real(8) :: zref(nsamp), minref, maxref
+      integer :: nlook
+      real(8) :: zref(nsamp)
+      real(8) :: yref(nsamp, ngvarg + 1)
       real(8), allocatable :: nsref(:)
+      real(8) :: usnsref(nsamp)
+      real(8) :: minref, maxref
 
       ! indexes
-      integer :: i, j, k1, k2, igv, iy, fi, nst, ireal
+      integer :: i, j, k1, k2, igv, iy, fi, nst, ireal, luidx
 
       ! allocate arrays based on number of data and max search
       allocate (rhs(nsearch), lhs(nsearch, nsearch), kwts(nsearch))
@@ -84,9 +88,10 @@ contains
       allocate (results(ndata), anisxyz(3, ndata))
       allocate (cmeans(ngvarg), cstdevs(ngvarg))
       allocate (imputed(ndata, ngvarg + 2, nreals)) ! +2 for nugget and zval
+      allocate (zinit(ndata, nreals)) ! +2 for nugget and zval
 
       ! build reference distribution for transformations
-      call build_refcdf(nsamp, zref, nsref)
+      call build_refcdf(nsamp, zref, nsref, yref, usnsref)
       minref = minval(zref)
       maxref = maxval(zref)
       write (*, *) " "
@@ -129,7 +134,6 @@ contains
       !
       REALLOOP: do ireal = 1, nreals
 
-         write (*, *) " "
          write (*, *) "imputing realization", ireal
 
          ! define random path through nodes
@@ -140,6 +144,7 @@ contains
          isim = 0
          useidx = 0
          nuse = 0
+         nlook = 0
 
          !
          ! loop over data locations
@@ -198,6 +203,9 @@ contains
                   cstdevs(igv) = 1.d0
                end if
 
+               ! ! min stdev to prevent getting stuck?
+               if (cstdevs(igv) .lt. 0.1) cstdevs(igv) = 0.1
+
                ! update this location and factor as simulated
                isim(simidx, igv) = 1
 
@@ -241,8 +249,10 @@ contains
                yimp1 = reshape(sim(simidx, :), shape=[1, nfact]) ! reshape to preserve first dim
                call network_forward(nnet, yimp1, zimp1, .false.)
 
-               if (zimp1(1) .lt. minref) stop "ERROR: data beyond ref min tail"
-               if (zimp1(1) .gt. maxref) stop "ERROR: data beyond ref max tail"
+               zinit(simidx, ireal) = zimp1(1)
+
+               ! if (zimp1(1) .lt. minref) stop "ERROR: data beyond ref min tail"
+               ! if (zimp1(1) .gt. maxref) stop "ERROR: data beyond ref max tail"
 
                call transform_to_refcdf(zimp1(1), zref, nsref, zimp1(1))
 
@@ -257,6 +267,28 @@ contains
                end if
 
             end do COARSE
+
+            !
+            ! If coarse search doesn't converge, grab the correct zval and corresponding
+            ! factors from the reference look up table. If there are only a few
+            ! samples that dont converge, variogram reproduction shound't be affected
+            ! too much.
+            !
+            ! ! this tolerance is arbitrary (could be tol1?)
+            ! if (diff1 .gt. tol1) then
+
+            !    ! grab NS z value and corresponding factors from table
+            !    call lookup_table(var(simidx), usnsref, yref, zimp1, yimp1, luidx)
+            !    zinit(simidx, ireal) = zref(luidx)
+
+            !    ! write (*, *) "conditional means:", cmeans
+            !    ! write (*, *) "conditional stdevs:", cstdevs
+
+            !    ! update difference
+            !    diff1 = abs(zimp1(1) - var(simidx))
+            !    nlook = nlook + 1
+
+            ! end if
 
             !
             ! yimp1 contains imputed values which meet the first tolerance; now
@@ -274,6 +306,9 @@ contains
             factpath = [(fi, fi=1, nfact)]
             call shuffle(factpath)
 
+            !
+            ! solution polishing
+            !
             k2 = 0
             POLISH: do while (diff2 .gt. tol2)
 
@@ -298,6 +333,7 @@ contains
 
                   ! calculate the new imputed value
                   call network_forward(nnet, ytry, ztry, .false.)
+                  zinit(simidx, ireal) = ztry(1)
                   call transform_to_refcdf(ztry(1), zref, nsref, ztry(1))
 
                   ! did this pertubation improve the solution?
@@ -335,6 +371,8 @@ contains
             imputed(simidx, nfact + 1, ireal) = zimp2(1)
 
          end do DATALOOP
+
+         if (nlook .gt. 0) write (*, *) nlook, "values taken from lookup table"
 
       end do REALLOOP
 
@@ -386,17 +424,18 @@ contains
 
    end subroutine krige
 
-   subroutine build_refcdf(nsamp, zref, nsref)
+   subroutine build_refcdf(nsamp, zref, nsref, yref, usnsref)
 
       ! build reference CDF for the normal score transform
       ! of imputed values
 
-      integer, intent(in) :: nsamp
-      real(8), intent(inout) :: zref(nsamp)
-      real(8), allocatable, intent(inout) :: nsref(:)
+      integer, intent(in) :: nsamp ! num samples in ref CDF
+      real(8), intent(inout) :: zref(nsamp) ! sorted zref
+      real(8), allocatable, intent(inout) :: nsref(:) ! sorted NS values
+      real(8), intent(inout) :: usnsref(nsamp) ! unsorted NS values
+      real(8), intent(inout) :: yref(nsamp, ngvarg + 1) ! Gauss lookup table
       real(8), allocatable :: tmp(:)
-      real(8) :: yrand(nsamp, ngvarg + 1), wt(nsamp)
-      real(8) :: p, xp
+      real(8) :: p, xp, wt(nsamp)
       integer :: i, j, ierr, nfact
 
       nfact = ngvarg + 1
@@ -407,12 +446,12 @@ contains
          do j = 1, nfact
             p = grnd()
             call gauinv(p, xp, ierr)
-            yrand(i, j) = xp
+            yref(i, j) = xp
          end do
       end do
 
       ! calculate the corresponding z values
-      call network_forward(nnet, yrand, zref, nstrans=.false.)
+      call network_forward(nnet, yref, zref, nstrans=.false.)
 
       ! normal score to build transform table
       do i = 1, nsamp
@@ -421,7 +460,10 @@ contains
       call nscore(nsamp, zref, dble(-1e21), dble(1e21), 1, wt, &
                   tmp, nsref, ierr)
 
-      ! sort the reference distribution and return
+      ! keep an unsorted NS copy for lookup table
+      usnsref = nsref
+
+      ! sort the reference distribution (for interp.) and return
       call sortem(1, nsamp, zref, 1, nsref, zref, zref, zref, &
                   zref, zref, zref, zref)
 
@@ -444,5 +486,25 @@ contains
       zimp = powint(zref(j), zref(j + 1), nsref(j), nsref(j + 1), z, 1.d0)
 
    end subroutine transform_to_refcdf
+
+   subroutine lookup_table(z, zref, yref, zimp, yimp, idx)
+
+      real(8), intent(in) :: z ! target data value
+      real(8), intent(in) :: zref(:) ! unsorted reference z values
+      real(8), intent(in) :: yref(:, :) ! unsorted Gauss factors corresponding to zref
+      real(8), intent(out) :: zimp(:) ! new imputed value from lookup table
+      real(8), intent(out) :: yimp(:, :) ! Gauss factors corresponding to zimp
+      real(8) :: diff(size(zref))
+      integer, intent(out) :: idx
+
+      ! find the minimum diff between target and table
+      diff = abs(zref - z)
+      idx = minloc(diff, dim=1)
+
+      ! grab the values from that index
+      zimp = zref(idx)
+      yimp(1, :) = yref(idx, :)
+
+   end subroutine lookup_table
 
 end module impute_mod
