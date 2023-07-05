@@ -17,6 +17,7 @@ module geostat
 
    ! simulation variables
    real(8), allocatable :: imputed(:, :, :) ! (ndata, nfact, nreals)
+   real(8), allocatable :: zinit(:, :)
    integer :: nsearch
    integer :: nreals
    integer :: rseed
