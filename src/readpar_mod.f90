@@ -334,13 +334,14 @@ contains
       ! open the output file and write headers now that we know ngvarg
       open (lout, file=outfile, status="UNKNOWN")
       write (lout, "(A)") "Imputed Data Values"
-      write (lout, "(i2)") 6 + ngvarg + 1
+      write (lout, "(i2)") 7 + ngvarg + 1
       write (lout, "(A)") "dhid"
       write (lout, "(A)") "x"
       write (lout, "(A)") "y"
       write (lout, "(A)") "z"
       write (lout, "(A)") "data value"
       write (lout, "(A)") "imputed value"
+      write (lout, "(A)") "nmr value"
       do iv = 1, ngvarg + 1
          write (lout, "(a6, i3)") "Factor", iv
       end do
