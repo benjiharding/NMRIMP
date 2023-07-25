@@ -99,6 +99,7 @@ contains
       write (*, *) "NScore min and max:", minval(nsref), maxval(nsref)
       write (*, *) " "
 
+      ! write out the reference dist and cumulative probs.
       do i = 1, nsamp
          write (ldbg, "(*(g14.8,1x))") dble(i)/(dble(nsamp) + 1.d0), zref(i), nsref(i)
       end do
@@ -203,7 +204,7 @@ contains
                   cstdevs(igv) = 1.d0
                end if
 
-               ! ! min stdev to prevent getting stuck?
+               ! min stdev to prevent getting stuck?
                if (cstdevs(igv) .lt. 0.1) cstdevs(igv) = 0.1
 
                ! update this location and factor as simulated
@@ -251,8 +252,14 @@ contains
 
                zinit(simidx, ireal) = zimp1(1)
 
-               ! if (zimp1(1) .lt. minref) stop "ERROR: data beyond ref min tail"
-               ! if (zimp1(1) .gt. maxref) stop "ERROR: data beyond ref max tail"
+               ! if (zimp1(1) .lt. minref) then
+               !    write (*, *) zimp1(1), cstdevs
+               !    stop "ERROR: data beyond ref min tail"
+               ! end if
+               ! if (zimp1(1) .gt. maxref) then
+               !    write (*, *) zimp1(1), cstdevs
+               !    stop "ERROR: data beyond ref max tail"
+               ! end if
 
                call transform_to_refcdf(zimp1(1), zref, nsref, zimp1(1))
 
@@ -442,8 +449,8 @@ contains
       wt = 1.d0
 
       ! initialize independent N(0,1) realizations
-      do i = 1, nsamp
-         do j = 1, nfact
+      do j = 1, nfact
+         do i = 1, nsamp
             p = grnd()
             call gauinv(p, xp, ierr)
             yref(i, j) = xp
