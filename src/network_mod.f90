@@ -3,6 +3,8 @@ module network_mod
    use geostat, only: nnet, wts
    use types_mod, only: network
    use subs, only: nscore
+   use mtmod, only: grnd
+   use constants
 
    implicit none
 
@@ -145,6 +147,9 @@ contains
 
       ! normal score transform if required
       if (nstrans) then
+         do i = 1, size(AL)
+            AL(i) = AL(i) + grnd()*EPSLON ! random despike
+         end do
          call nscore(size(AL), AL, dble(-1.0e21), dble(1.0e21), 1, &
                      wts, tmp, vrg, ierr)
          if (ierr .gt. 0) stop "Error in normal score transform"
