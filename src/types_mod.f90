@@ -21,6 +21,10 @@ module types_mod
    type weights
       real(8), allocatable :: nnwts(:, :) ! (n, n)
       real(8), allocatable :: nnbias(:, :) ! (n, 1)
+      real(8), allocatable :: nnmu(:) ! normalization mean (1, n)
+      real(8), allocatable :: nnsig(:) ! normalization stdev (1, n)
+      real(8), allocatable :: gmma(:) ! normalization loc (1, n)
+      real(8), allocatable :: beta(:) ! normalization scale (1, n)
       integer :: sw(2), sb(2) ! shape of weights and bias matrices
    end type weights
 
@@ -29,10 +33,12 @@ module types_mod
       integer, allocatable :: ld(:) ! layer dimensions
       type(weights), allocatable :: layer(:) ! layer matrices (n, n)
       integer, allocatable :: iwts(:), ibias(:) ! vector indices
+      integer, allocatable :: igmma(:), ibeta(:) ! vector indices
       integer :: af ! activation function
       integer :: dims ! total number of weights + biases
       integer :: ireg ! regularizer (0=none, 1=L1, 2=L2)
       real(8) :: regconst ! regularization constant
+      logical :: norm ! batch normalization?
    end type network
 
    ! kdtree pointers

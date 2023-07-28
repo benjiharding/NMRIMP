@@ -25,6 +25,7 @@ contains
       write (99, "(A)") '5                                 - number of network layers (input to output layer)'
       write (99, "(A)") '16 5 5 5 1                        - network layer dimensions (input + nugget to output layer)'
       write (99, "(A)") '1                                 - network activation func. (1=sigmoid, 2=tanh, 3=relu, 4=linear)'
+      write (99, "(A)") '0                                 - normalize layer inputs? (0=no, 1=yes)'
       write (99, "(A)") 'nmrwts.out                        - input file with optimzed network weights'
       write (99, "(A)") '40                                - maximum previously simulated nodes'
       write (99, "(A)") '50000 10000                       - maximum iterations for step 1 and step 2'

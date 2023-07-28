@@ -70,7 +70,7 @@ contains
       integer :: nfact
 
       ! reference distribution
-      integer, parameter :: nsamp = 1000000
+      integer, parameter :: nsamp = 2000000
       integer :: nlook
       real(8) :: zref(nsamp)
       real(8) :: yref(nsamp, ngvarg + 1)
@@ -91,10 +91,9 @@ contains
       allocate (zinit(ndata, nreals)) ! +2 for nugget and zval
 
       ! build reference distribution for transformations
-      call build_refcdf(nsamp, zref, nsref, yref, usnsref)
+      call build_refcdf(nsamp, zref, nsref, yref, usnsref) ! this also calc norm moments
       minref = minval(zref)
       maxref = maxval(zref)
-      write (*, *) " "
       write (*, *) "Reference min and max:", minref, maxref
       write (*, *) "NScore min and max:", minval(nsref), maxval(nsref)
       write (*, *) " "
@@ -248,7 +247,8 @@ contains
 
                ! calculate imputed value
                yimp1 = reshape(sim(simidx, :), shape=[1, nfact]) ! reshape to preserve first dim
-               call network_forward(nnet, yimp1, zimp1, .false.)
+               call network_forward(nnet, yimp1, zimp1, nstrans=.false., &
+                                    norm=nnet%norm, calc_mom=.false.)
 
                zinit(simidx, ireal) = zimp1(1)
 
@@ -323,7 +323,7 @@ contains
 
                do j = 1, nfact
 
-                  iy = j !factpath(j)
+                  iy = factpath(j)
 
                   ! perturb a factor
                   ! pert = -IMPEPS + grnd()*(IMPEPS - (-IMPEPS))
@@ -339,7 +339,8 @@ contains
                   end if
 
                   ! calculate the new imputed value
-                  call network_forward(nnet, ytry, ztry, .false.)
+                  call network_forward(nnet, ytry, ztry, nstrans=.false., &
+                                       norm=nnet%norm, calc_mom=.false.)
                   zinit(simidx, ireal) = ztry(1)
                   call transform_to_refcdf(ztry(1), zref, nsref, ztry(1))
 
@@ -458,7 +459,8 @@ contains
       end do
 
       ! calculate the corresponding z values
-      call network_forward(nnet, yref, zref, nstrans=.false.)
+      call network_forward(nnet, yref, zref, nstrans=.false., &
+                           norm=nnet%norm, calc_mom=.true.)
 
       ! normal score to build transform table
       do i = 1, nsamp

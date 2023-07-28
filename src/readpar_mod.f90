@@ -22,7 +22,7 @@ contains
       character(256) :: str
       integer :: lin
       logical :: testfl
-      integer :: test, i, j, iv
+      integer :: test, i, j, iv, tmp
       integer :: dhcol, xyzcols(3), varcol, wtcol, ncols, numwts
       real(8) :: tmin, tmax
       real(8), allocatable :: nnwts(:)
@@ -155,6 +155,13 @@ contains
       read (lin, *, iostat=test) nnet%af
       if (test .ne. 0) stop "ERROR in parameter file"
       write (*, "(a,10(i0,x))") '  activation function: ', nnet%af
+
+      ! batch normalization
+      nnet%norm = .false.
+      read (lin, *, iostat=test) tmp
+      if (test .ne. 0) stop "ERROR in parameter file"
+      if (tmp .gt. 0) nnet%norm = .true.
+      write (*, *) '  normalize layer inputs?: ', nnet%norm
 
       ! no regularization at test time
       nnet%ireg = 0
