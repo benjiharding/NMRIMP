@@ -20,6 +20,13 @@ contains
          end do
       end do
 
+      do i = 1, nnet%nl - 1
+         do j = 1, nnet%layer(i)%sb(1)
+            write (lmom, "(*(g14.8,1x))") nnet%layer(i)%nnmu(j), &
+               nnet%layer(i)%nnsig(j)
+         end do
+      end do
+
    end subroutine write_files
 
 end module output_mod

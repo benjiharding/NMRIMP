@@ -39,7 +39,7 @@ module geostat
    type(variogram), allocatable :: pool(:)
 
    ! output file
-   integer :: lout, ldbg
+   integer :: lout, ldbg, lmom
 
 contains
 

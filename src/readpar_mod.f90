@@ -32,6 +32,7 @@ contains
       lin = 1
       lout = 2
       ldbg = 3
+      lmom = 4
 
       ! attempt to open the parfile
       do i = 1, 256
@@ -176,6 +177,13 @@ contains
       if (test .ne. 0) stop "ERROR in parameter file"
       call chknam(nnwtsfile, 256)
       write (*, "(2a)") '  output file: ', trim(adjustl(nnwtsfile))
+
+      ! open the output file for layer moments
+      open (lmom, file="moments.out", status="UNKNOWN")
+      write (lmom, "(A)") "Network Moments"
+      write (lmom, "(i2)") 2
+      write (lmom, "(A)") "mu"
+      write (lmom, "(A)") "sigma"
 
       ! previously simulated nodes to consider
       read (lin, *, iostat=test) nsearch

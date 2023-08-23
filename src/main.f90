@@ -2,10 +2,10 @@ program main
 
    ! Network model of regionalization imputation. Latent
    ! Gaussian factors are imputed using Sequential Gaussian
-   ! Rejection Impuation. Imputed factors honour the variograms
-   ! specified by the pool and reproduce the hard data values
-   ! when passed through the optimized network generated
-   ! with NMROPT.
+   ! Rejection (SGR) Impuation. Imputed factors honour the
+   ! variograms specified by the pool and reproduce the hard
+   ! data values when passed through the optimized network
+   ! generated with NMROPT.
    !
    ! Author: Ben Harding
    ! Date: June 2023
@@ -37,6 +37,7 @@ program main
    ! close all output files
    close (lout)
    close (ldbg)
+   close (lmom)
 
    ! finished
    write (*, *) " "
