@@ -309,10 +309,6 @@ contains
             yimp2 = yimp1
             ytry = yimp1
 
-            ! random path though the factors
-            factpath = [(fi, fi=1, nfact)]
-            call shuffle(factpath)
-
             !
             ! solution polishing
             !
@@ -320,6 +316,10 @@ contains
             POLISH: do while (diff2 .gt. tol2)
 
                k2 = k2 + 1
+
+               ! random path though the factors
+               factpath = [(fi, fi=1, nfact)]
+               call shuffle(factpath)
 
                do j = 1, nfact
 
