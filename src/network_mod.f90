@@ -172,6 +172,8 @@ contains
          W = transpose(net%layer(i)%nnwts)
          b = transpose(net%layer(i)%nnbias)
 
+         b = 0.d0
+
          ! forward pass - BN prior to activation
          b = spread(b(1, :), 1, size(A_prev, dim=1))
          Zmat = matmul(A_prev, W) + b
@@ -219,6 +221,9 @@ contains
       WL = transpose(net%layer(net%nl - 1)%nnwts)
       bL = transpose(net%layer(net%nl - 1)%nnbias)
       bL = spread(bL(1, :), 1, size(Amat, dim=1))
+
+      bL = 0.d0
+
       ZL = matmul(Amat, WL) + bL
 
       if (norm) then
