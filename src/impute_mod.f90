@@ -70,7 +70,7 @@ contains
       integer :: nfact
 
       ! reference distribution
-      integer, parameter :: nsamp = 2000000
+      integer, parameter :: nsamp = 1000000
       integer :: nlook
       real(8) :: zref(nsamp)
       real(8) :: yref(nsamp, ngvarg + 1)
@@ -276,28 +276,6 @@ contains
             end do COARSE
 
             !
-            ! If coarse search doesn't converge, grab the correct zval and corresponding
-            ! factors from the reference look up table. If there are only a few
-            ! samples that dont converge, variogram reproduction shound't be affected
-            ! too much.
-            !
-            ! ! this tolerance is arbitrary (could be tol1?)
-            ! if (diff1 .gt. tol1) then
-
-            !    ! grab NS z value and corresponding factors from table
-            !    call lookup_table(var(simidx), usnsref, yref, zimp1, yimp1, luidx)
-            !    zinit(simidx, ireal) = zref(luidx)
-
-            !    ! write (*, *) "conditional means:", cmeans
-            !    ! write (*, *) "conditional stdevs:", cstdevs
-
-            !    ! update difference
-            !    diff1 = abs(zimp1(1) - var(simidx))
-            !    nlook = nlook + 1
-
-            ! end if
-
-            !
             ! yimp1 contains imputed values which meet the first tolerance; now
             ! polish the previous solution and check against the second tolerance
             !
@@ -366,6 +344,27 @@ contains
                end if
 
             end do POLISH
+
+            ! !
+            ! ! If the polish doesn't converge, grab the correct zval and corresponding
+            ! ! factors from the reference look up table. If there are only a few
+            ! ! samples that dont converge, variogram reproduction shound't be affected
+            ! ! too much.
+            ! !
+            ! ! this tolerance is arbitrary (could be tol2?)
+            ! if (diff2 .gt. tol2) then
+
+            !    ! grab NS z value and corresponding factors from table
+            !    call lookup_table(var(simidx), usnsref, yref, zimp2, yimp2, luidx)
+            !    zinit(simidx, ireal) = zref(luidx)
+
+            !    ! write (*, *) "conditional means:", cmeans
+            !    ! write (*, *) "conditional stdevs:", cstdevs
+
+            !    ! track lookups
+            !    nlook = nlook + 1
+
+            ! end if
 
             !
             ! update the conditioning values for this realization
