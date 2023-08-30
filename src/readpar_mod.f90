@@ -127,10 +127,10 @@ contains
       if (idbg .gt. 0) then
          open (ldbg, file=dbgfile, status="UNKNOWN")
          write (ldbg, "(A)") "Reference Distribution"
-         write (ldbg, "(i2)") 3
+         write (ldbg, "(i1)") 3
          write (ldbg, "(A)") "CDF y"
-         write (ldbg, "(A)") "CDF x"
-         write (ldbg, "(A)") "NS CDF x"
+         write (ldbg, "(A)") "Raw Activation"
+         write (ldbg, "(A)") "NScore Activation"
       end if
 
       ! imputation output
