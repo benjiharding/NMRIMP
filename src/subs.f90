@@ -1058,4 +1058,14 @@ contains
 
    end subroutine get_subsample
 
+   function linear_rescale(x, a, b) result(y)
+      ! linearly rescale scale min(x), max(x) to a, b
+      real(8), intent(in) :: x(:)
+      real(8), intent(in) :: a, b
+      real(8) :: y(size(x))
+
+      y = ((b - a)*(x - minval(x)))/(maxval(x) - minval(x)) + a
+
+   end function linear_rescale
+
 end module subs
