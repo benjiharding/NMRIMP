@@ -172,23 +172,18 @@ contains
          W = transpose(net%layer(i)%nnwts)
          b = transpose(net%layer(i)%nnbias)
 
-         b = 0.d0
-
          ! forward pass - BN prior to activation
          b = spread(b(1, :), 1, size(A_prev, dim=1))
          Zmat = matmul(A_prev, W) + b
          if (norm) then
             if (calc_mom) then
                call normalize_input(Zmat, Znorm, net, i, calc_mom=.true., &
-                                    gmma=net%layer(net%nl - 1)%gmma, &
-                                    beta=net%layer(net%nl - 1)%beta)
+                                    gmma=net%layer(i)%gmma, beta=net%layer(i)%beta)
             else
                if (.not. allocated(net%layer(i)%nnmu)) stop "moment vectors must be allocated"
                call normalize_input(Zmat, Znorm, net, i, calc_mom=.false., &
-                                    mu=net%layer(i)%nnmu, &
-                                    sig=net%layer(i)%nnsig, &
-                                    gmma=net%layer(net%nl - 1)%gmma, &
-                                    beta=net%layer(net%nl - 1)%beta)
+                                    mu=net%layer(i)%nnmu, sig=net%layer(i)%nnsig, &
+                                    gmma=net%layer(i)%gmma, beta=net%layer(i)%beta)
             end if
          else
             Znorm = Zmat
@@ -202,15 +197,12 @@ contains
          ! if (norm) then
          !    if (calc_mom) then
          !       call normalize_input(Amat, Anorm, net, i, calc_mom=.true., &
-         !                            gmma=net%layer(net%nl - 1)%gmma, &
-         !                            beta=net%layer(net%nl - 1)%beta)
+         !                            gmma=net%layer(i)%gmma, beta=net%layer(i)%beta)
          !    else
          !       if (.not. allocated(net%layer(i)%nnmu)) stop "moment vectors must be allocated"
          !       call normalize_input(Amat, Anorm, net, i, calc_mom=.false., &
-         !                            mu=net%layer(i)%nnmu, &
-         !                            sig=net%layer(i)%nnsig, &
-         !                            gmma=net%layer(net%nl - 1)%gmma, &
-         !                            beta=net%layer(net%nl - 1)%beta)
+         !                            mu=net%layer(i)%nnmu, sig=net%layer(i)%nnsig, &
+         !                            gmma=net%layer(i)%gmma, beta=net%layer(i)%beta)
          !    end if
          !    Amat = Anorm
          ! end if
@@ -221,9 +213,6 @@ contains
       WL = transpose(net%layer(net%nl - 1)%nnwts)
       bL = transpose(net%layer(net%nl - 1)%nnbias)
       bL = spread(bL(1, :), 1, size(Amat, dim=1))
-
-      bL = 0.d0
-
       ZL = matmul(Amat, WL) + bL
 
       if (norm) then
@@ -246,7 +235,7 @@ contains
       ! normal score transform if required
       if (nstrans) then
          do i = 1, size(AL)
-            AL(i) = AL(i) + grnd()*EPSLON ! random despike
+            AL(i) = AL(i) + grnd()*SMALLDBLE ! random despike
          end do
          call nscore(size(AL), AL, dble(-1.0e21), dble(1.0e21), 1, &
                      wts, tmp, vrg, ierr)
@@ -273,11 +262,11 @@ contains
          net%layer(i)%nnbias = reshape(vector(net%ibias(i) + 1:net%ibias(i + 1)), &
                                        shape=(net%layer(i)%sb), order=[2, 1])
          if (net%norm) then
-            ! ! get the gamma and beta vectors
-            ! net%layer(i)%gmma = vector(net%igmma(i) + 1:net%igmma(i + 1))
-            ! net%layer(i)%beta = vector(net%ibeta(i) + 1:net%ibeta(i + 1))
-            net%layer(i)%gmma = 1.d0
-            net%layer(i)%beta = 0.d0
+            ! get the gamma and beta vectors
+            net%layer(i)%gmma = vector(net%igmma(i) + 1:net%igmma(i + 1))
+            net%layer(i)%beta = vector(net%ibeta(i) + 1:net%ibeta(i + 1))
+            ! net%layer(i)%gmma = 1.d0
+            ! net%layer(i)%beta = 0.d0
          end if
 
       end do
