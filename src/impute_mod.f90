@@ -7,7 +7,7 @@ module impute_mod
    use types_mod, only: variogram, network, kdtrees
    use vario_mod, only: set_sill, set_rotmatrix
    use covasubs, only: get_cov
-   use constants, only: MINCOV, IMPEPS, EPSLON
+   use constants, only: MINCOV, IMPEPS, EPSLON, SMALLDBLE
    use subs, only: shuffle, gauinv, sortem, nscore, &
                    locate, powint
 
@@ -79,7 +79,7 @@ contains
       real(8) :: minref, maxref
 
       ! indexes
-      integer :: i, j, k1, k2, igv, iy, fi, nst, ireal, luidx
+      integer :: i, j, k1, k2, igv, ix, iy, fi, nst, ireal, luidx
 
       ! allocate arrays based on number of data and max search
       allocate (rhs(nsearch), lhs(nsearch, nsearch), kwts(nsearch))
@@ -103,9 +103,9 @@ contains
          write (ldbg, "(*(g14.8,1x))") dble(i)/(dble(nsamp) + 1.d0), zref(i), nsref(i)
       end do
 
-      ! min and max Gaussian values ~ [-5, 5]
-      call gauinv(0.0000001d0, gmin, ierr)
-      call gauinv(0.9999999d0, gmax, ierr)
+      ! min and max Gaussian values ~ [-4, 4]
+      call gauinv(0.0001d0, gmin, ierr)
+      call gauinv(0.9999d0, gmax, ierr)
 
       ! total number of factors, plus one for nugget
       nfact = ngvarg + 1
@@ -219,9 +219,11 @@ contains
             !
             diff1 = 999.0
             k1 = 0
+
             COARSE: do while (diff1 .gt. tol1)
 
                k1 = k1 + 1
+               ix = 0
 
                ! simulate each factor at this simidx
                do igv = 1, ngvarg
@@ -232,13 +234,23 @@ contains
 
                   ! enforce reasonable min/max Gaussian values
                   if (sim(simidx, igv) .lt. gmin) then
+                     ! write (*, *) "extreme value in coarse search", sim(simidx, igv)
                      sim(simidx, igv) = gmin
+                     ix = ix + 1
                   end if
                   if (sim(simidx, igv) .gt. gmax) then
+                     ! write (*, *) "extreme value in coarse search", sim(simidx, igv)
                      sim(simidx, igv) = gmax
+                     ix = ix + 1
                   end if
 
                end do
+
+               ! there is a 0.001% chance of getting values +/- 4.2
+               ! so if we get more than one cycle and try again
+               if (ix .gt. 1) then
+                  k1 = k1 - 1 ! this has infinte loop potential - be careful
+               end if
 
                ! simulate nugget
                p = grnd()
@@ -267,7 +279,7 @@ contains
                diff1 = abs(zimp1(1) - var(simidx))
 
                ! break if we need to
-               if (k1 .ge. iter1) then
+               if (k1 .ge. iter1 - 2) then
                   !   write (*, *) "coarse search did not converge after", iter1, &
                   !      "iterations at data index", simidx
                   exit
@@ -304,16 +316,18 @@ contains
                   iy = factpath(j)
 
                   ! perturb a factor
-                  ! pert = -IMPEPS + grnd()*(IMPEPS - (-IMPEPS))
                   pert = -tol2 + grnd()*(tol2 - (-tol2))
                   ytry(1, iy) = yimp2(1, iy) + pert
 
-                  ! enforce reasonable min/max Gaussian values
+                  ! revert to previous value if the new one is extreme
                   if (ytry(1, iy) .lt. gmin) then
-                     ytry(1, iy) = gmin
+                     ! write (*, *) "extreme value in polish", ytry(1, iy)
+                     ytry(1, iy) = yimp2(1, iy)
                   end if
+
                   if (ytry(1, iy) .gt. gmax) then
-                     ytry(1, iy) = gmax
+                     ! write (*, *) "extreme value in polish", ytry(1, iy)
+                     ytry(1, iy) = yimp2(1, iy)
                   end if
 
                   ! calculate the new imputed value
@@ -339,7 +353,7 @@ contains
                ! break if we need to
                if (k2 .ge. iter2) then
                   write (*, *) "solution polishing did not converge after", iter2, &
-                     "iterations at data index", simidx
+                     "iterations at data index", simidx, "diff=", diff2
                   exit
                end if
 
@@ -448,13 +462,14 @@ contains
       nfact = ngvarg + 1
       wt = 1.d0
 
-      ! initialize independent N(0,1) realizations
+      ! initialize independent N(0,1) y realizations
       do j = 1, nfact
          do i = 1, nsamp
             p = grnd()
             call gauinv(p, xp, ierr)
             yref(i, j) = xp
          end do
+         ! write (*, *) minval(yref(:, j)), maxval(yref(:, j))
       end do
 
       ! calculate the corresponding z values
@@ -463,7 +478,7 @@ contains
 
       ! normal score to build transform table
       do i = 1, nsamp
-         zref(i) = zref(i) + grnd()*EPSLON ! random despike
+         zref(i) = zref(i) + grnd()*SMALLDBLE ! random despike
       end do
       call nscore(nsamp, zref, dble(-1e21), dble(1e21), 1, wt, &
                   tmp, nsref, ierr)
