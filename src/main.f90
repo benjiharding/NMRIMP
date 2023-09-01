@@ -1,5 +1,8 @@
 program main
 
+   !
+   ! NMRIMP
+   !
    ! Network model of regionalization imputation. Latent
    ! Gaussian factors are imputed using Sequential Gaussian
    ! Rejection (SGR) Impuation. Imputed factors honour the
