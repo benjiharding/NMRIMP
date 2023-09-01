@@ -9,7 +9,7 @@ module impute_mod
    use covasubs, only: get_cov
    use constants, only: MINCOV, IMPEPS, EPSLON, SMALLDBLE
    use subs, only: shuffle, gauinv, sortem, nscore, &
-                   locate, powint
+                   locate, powint, dblecumsum
 
    implicit none
 
@@ -78,6 +78,13 @@ contains
       real(8) :: usnsref(nsamp)
       real(8) :: minref, maxref
 
+      ! dynamic tolerances
+      real(8), allocatable :: vsort(:), wsort(:), vord(:)
+      real(8), allocatable :: vcdf(:)
+      real(8) :: qv, qdiff
+      real(8) :: dtol1, dtol2 ! dynamic
+      integer :: qidx, qj
+
       ! indexes
       integer :: i, j, k1, k2, igv, ix, iy, fi, nst, ireal, luidx
 
@@ -86,7 +93,7 @@ contains
       allocate (nuse(ndata, ngvarg), useidx(ndata, ndata))
       allocate (sim(ndata, ngvarg + 1), isim(ndata, ngvarg), randpath(ndata))
       allocate (results(ndata), anisxyz(3, ndata))
-      allocate (cmeans(ngvarg), cstdevs(ngvarg))
+      allocate (cmeans(ngvarg + 1), cstdevs(ngvarg + 1)) ! +1 for nugget
       allocate (imputed(ndata, ngvarg + 2, nreals)) ! +2 for nugget and zval
       allocate (zinit(ndata, nreals)) ! +2 for nugget and zval
 
@@ -102,6 +109,16 @@ contains
       do i = 1, nsamp
          write (ldbg, "(*(g14.8,1x))") dble(i)/(dble(nsamp) + 1.d0), zref(i), nsref(i)
       end do
+
+      ! build declustered data cdf for quantile lookup
+      vsort = var
+      wsort = wts/sum(wts)
+      vord = [(i, i=1, ndata)]
+      call sortem(1, ndata, vsort, 2, wsort, vord, vsort, vsort, vsort, vsort, &
+                  vsort, vsort)
+      vcdf = dblecumsum(wsort)
+      vcdf = vcdf(2:)
+      vcdf = vcdf - vcdf(1)/2.0
 
       ! min and max Gaussian values ~ [-4, 4]
       call gauinv(0.0001d0, gmin, ierr)
@@ -211,6 +228,29 @@ contains
 
             end do FACTLOOP
 
+            ! cmean and cstdev for nugged
+            cmeans(ngvarg + 1) = 0.d0
+            cstdevs(ngvarg + 1) = 1.d0
+
+            !
+            ! dyanmic tolerances
+            !
+            ! get the quantile of the variable we are trying to match
+            ! so we can find the corresponding activation in the refdist
+            !
+            call locate(vsort, ndata, 1, ndata, var(simidx), qj)
+            qj = min(max(1, qj), (ndata - 1))
+            qv = powint(vsort(qj), vsort(qj + 1), vcdf(qj), vcdf(qj + 1), &
+                        var(simidx), 1.d0)
+
+            ! find the index in nsamp that corresponds to qv
+            qidx = int(nsamp*qv)
+
+            ! get the difference between adjacent samples at this
+            ! position in the cdf
+            qdiff = abs(zref(qidx + 1) - zref(qidx))
+            qdiff = (qdiff + abs(zref(qidx - 1) - zref(qidx)))/2.d0
+
             !
             ! now that we have the conditional moments for each factor,
             ! repeatedly simulate values and check against the first tolerance
@@ -226,7 +266,7 @@ contains
                ix = 0
 
                ! simulate each factor at this simidx
-               do igv = 1, ngvarg
+               do igv = 1, ngvarg + 1
 
                   p = grnd()
                   call gauinv(p, xp, ierr)
@@ -246,16 +286,11 @@ contains
 
                end do
 
-               ! there is a 0.001% chance of getting values +/- 4.2
-               ! so if we get more than one cycle and try again
-               if (ix .gt. 1) then
-                  k1 = k1 - 1 ! this has infinte loop potential - be careful
-               end if
-
-               ! simulate nugget
-               p = grnd()
-               call gauinv(p, xp, ierr)
-               sim(simidx, ngvarg + 1) = xp
+               ! ! there is a 0.001% chance of getting values +/- 4.2
+               ! ! so if we get more than one cycle and try again
+               ! if (ix .gt. 1) then
+               !    k1 = k1 - 1 ! this has infinte loop potential - be careful
+               ! end if
 
                ! calculate imputed value
                yimp1 = reshape(sim(simidx, :), shape=[1, nfact]) ! reshape to preserve first dim
@@ -264,24 +299,15 @@ contains
 
                zinit(simidx, ireal) = zimp1(1)
 
-               ! if (zimp1(1) .lt. minref) then
-               !    write (*, *) zimp1(1), cstdevs
-               !    stop "ERROR: data beyond ref min tail"
-               ! end if
-               ! if (zimp1(1) .gt. maxref) then
-               !    write (*, *) zimp1(1), cstdevs
-               !    stop "ERROR: data beyond ref max tail"
-               ! end if
-
                call transform_to_refcdf(zimp1(1), zref, nsref, zimp1(1))
 
                ! get difference with true data value
                diff1 = abs(zimp1(1) - var(simidx))
 
                ! break if we need to
-               if (k1 .ge. iter1 - 2) then
-                  !   write (*, *) "coarse search did not converge after", iter1, &
-                  !      "iterations at data index", simidx
+               if (k1 .ge. iter1) then
+                  write (*, *) "coarse search did not converge after", iter1, &
+                     "iterations at data index", simidx
                   exit
                end if
 
@@ -315,8 +341,14 @@ contains
 
                   iy = factpath(j)
 
-                  ! perturb a factor
-                  pert = -tol2 + grnd()*(tol2 - (-tol2))
+                  ! ! perturb a factor
+                  ! if (qv .le. 0.1 .or. qv .ge. 0.9) then
+                  !    pert = -qdiff + grnd()*(qdiff - (-qdiff))
+                  ! else
+                  !    pert = -tol2 + grnd()*(tol2 - (-tol2))
+                  ! end if
+
+                  pert = -qdiff + grnd()*(qdiff - (-qdiff))
                   ytry(1, iy) = yimp2(1, iy) + pert
 
                   ! revert to previous value if the new one is extreme
