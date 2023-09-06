@@ -228,7 +228,7 @@ contains
 
             end do FACTLOOP
 
-            ! cmean and cstdev for nugged
+            ! cmean and cstdev for nugget
             cmeans(ngvarg + 1) = 0.d0
             cstdevs(ngvarg + 1) = 1.d0
 
@@ -263,7 +263,6 @@ contains
             COARSE: do while (diff1 .gt. tol1)
 
                k1 = k1 + 1
-               ix = 0
 
                ! simulate each factor at this simidx
                do igv = 1, ngvarg + 1
@@ -273,24 +272,15 @@ contains
                   sim(simidx, igv) = xp*cstdevs(igv) + cmeans(igv)
 
                   ! enforce reasonable min/max Gaussian values
-                  if (sim(simidx, igv) .lt. gmin) then
-                     ! write (*, *) "extreme value in coarse search", sim(simidx, igv)
-                     sim(simidx, igv) = gmin
-                     ix = ix + 1
-                  end if
-                  if (sim(simidx, igv) .gt. gmax) then
-                     ! write (*, *) "extreme value in coarse search", sim(simidx, igv)
-                     sim(simidx, igv) = gmax
-                     ix = ix + 1
-                  end if
+                  do while ((sim(simidx, igv) .lt. gmin) .or. &
+                            (sim(simidx, igv) .gt. gmax))
+                     ! resimulate if necessary
+                     p = grnd()
+                     call gauinv(p, xp, ierr)
+                     sim(simidx, igv) = xp*cstdevs(igv) + cmeans(igv)
+                  end do
 
                end do
-
-               ! ! there is a 0.001% chance of getting values +/- 4.2
-               ! ! so if we get more than one cycle and try again
-               ! if (ix .gt. 1) then
-               !    k1 = k1 - 1 ! this has infinte loop potential - be careful
-               ! end if
 
                ! calculate imputed value
                yimp1 = reshape(sim(simidx, :), shape=[1, nfact]) ! reshape to preserve first dim
@@ -307,7 +297,16 @@ contains
                ! break if we need to
                if (k1 .ge. iter1) then
                   write (*, *) "coarse search did not converge after", iter1, &
-                     "iterations at data index", simidx
+                     "iterations at data index", simidx, "diff=", diff1
+
+                  do j = 1, nfact
+                     write (*, *) cmeans(j), cstdevs(j)
+                  end do
+
+                  write (*, *) " "
+                  write (*, *) yimp1
+                  write (*, *) " "
+
                   exit
                end if
 
@@ -334,10 +333,10 @@ contains
                k2 = k2 + 1
 
                ! random path though the factors
-               factpath = [(fi, fi=1, nfact)]
+               factpath = [(fi, fi=1, nfact - 1)]
                call shuffle(factpath)
 
-               do j = 1, nfact
+               do j = 1, nfact - 1
 
                   iy = factpath(j)
 
@@ -349,6 +348,9 @@ contains
                   ! end if
 
                   pert = -qdiff + grnd()*(qdiff - (-qdiff))
+
+                  ! pert = -tol2 + grnd()*(tol2 - (-tol2))
+
                   ytry(1, iy) = yimp2(1, iy) + pert
 
                   ! revert to previous value if the new one is extreme
@@ -384,8 +386,13 @@ contains
 
                ! break if we need to
                if (k2 .ge. iter2) then
+                  write (*, *) " "
                   write (*, *) "solution polishing did not converge after", iter2, &
                      "iterations at data index", simidx, "diff=", diff2
+
+                  write (*, *) yimp2
+                  write (*, *) " "
+
                   exit
                end if
 
