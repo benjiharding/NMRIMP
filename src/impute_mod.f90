@@ -82,7 +82,6 @@ contains
       real(8), allocatable :: vsort(:), wsort(:), vord(:)
       real(8), allocatable :: vcdf(:)
       real(8) :: qv, qdiff
-      real(8) :: dtol1, dtol2 ! dynamic
       integer :: qidx, qj
 
       ! indexes
@@ -340,17 +339,8 @@ contains
 
                   iy = factpath(j)
 
-                  ! ! perturb a factor
-                  ! if (qv .le. 0.1 .or. qv .ge. 0.9) then
-                  !    pert = -qdiff + grnd()*(qdiff - (-qdiff))
-                  ! else
-                  !    pert = -tol2 + grnd()*(tol2 - (-tol2))
-                  ! end if
-
+                  ! perturb a factor
                   pert = -qdiff + grnd()*(qdiff - (-qdiff))
-
-                  ! pert = -tol2 + grnd()*(tol2 - (-tol2))
-
                   ytry(1, iy) = yimp2(1, iy) + pert
 
                   ! revert to previous value if the new one is extreme
