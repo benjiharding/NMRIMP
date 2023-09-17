@@ -117,7 +117,7 @@ contains
                   vsort, vsort)
       vcdf = dblecumsum(wsort)
       vcdf = vcdf(2:)
-      vcdf = vcdf - vcdf(1)/2.0
+      vcdf = vcdf - vcdf(1)/2.0 ! midpoint
 
       ! min and max Gaussian values ~ [-4, 4]
       call gauinv(0.0001d0, gmin, ierr)
@@ -214,7 +214,7 @@ contains
                   call krige(pool(igv), xyz, rhs, lhs, kwts, nuse(:, igv), useidx, &
                              sim(:, igv), simidx, cmeans(igv), cstdevs(igv))
                else
-                  ! if no data the distribution is N(0,1)
+                  ! if no conditioning the distribution is N(0,1)
                   cmeans(igv) = 0.d0
                   cstdevs(igv) = 1.d0
                end if
@@ -298,13 +298,13 @@ contains
                   write (*, *) "coarse search did not converge after", iter1, &
                      "iterations at data index", simidx, "diff=", diff1
 
-                  do j = 1, nfact
-                     write (*, *) cmeans(j), cstdevs(j)
-                  end do
+                  ! do j = 1, nfact
+                  !    write (*, *) cmeans(j), cstdevs(j)
+                  ! end do
 
-                  write (*, *) " "
-                  write (*, *) yimp1
-                  write (*, *) " "
+                  ! write (*, *) " "
+                  ! write (*, *) yimp1
+                  ! write (*, *) " "
 
                   exit
                end if
@@ -380,8 +380,8 @@ contains
                   write (*, *) "solution polishing did not converge after", iter2, &
                      "iterations at data index", simidx, "diff=", diff2
 
-                  write (*, *) yimp2
-                  write (*, *) " "
+                  ! write (*, *) yimp2
+                  ! write (*, *) " "
 
                   exit
                end if
