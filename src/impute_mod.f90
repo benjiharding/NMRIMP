@@ -17,7 +17,14 @@ contains
 
    subroutine impute()
 
+      !
+      ! convience subroutine to call imputer and handle any
+      ! resimulation if required
+      !
+
       real(8) :: start, finish
+      integer :: ireal, nresim, j
+      integer, allocatable :: rsidx(:), idxs(:) ! resim indices
 
       call cpu_time(start)
 
@@ -25,7 +32,44 @@ contains
       write (*, *) "Starting imputation..."
       write (*, *) " "
 
-      call nmr_imputer(pool, nreals, nsearch, imputed, iter1, iter2, tol1, tol2)
+      !
+      ! intitalize the imputer
+      !
+      call init_imputer()
+
+      !
+      ! main loop over realizations
+      !
+      REALLOOP: do ireal = 1, nreals
+
+         write (*, *) "imputing realization", ireal
+
+         j = 0
+         nresim = 0
+         call nmr_imputer(pool, ireal, nsearch, imputed, iter1, iter2, &
+                          tol1, tol2, nresim, rsidx)
+
+         ! do we need to resim any locations? nresim is updated by call to imputer
+         do while (nresim .gt. 0)
+
+            j = j + 1
+            if (j .gt. 5) exit
+            idxs = rsidx
+
+            write (*, *) "resimulating at", nresim, "locations"
+
+            ! reset the sim indicators for these locations
+            isim(rsidx, :) = 0
+
+            ! call the imputer again
+            call nmr_imputer(pool, ireal, nsearch, imputed, iter1, iter2, &
+                             tol1, tol2, nresim, rsidx, idxs)
+
+            ! if (j .gt. 5) exit
+
+         end do
+
+      end do REALLOOP
 
       call cpu_time(finish)
 
@@ -34,58 +78,14 @@ contains
 
    end subroutine impute
 
-   subroutine nmr_imputer(pool, nreals, nsearch, imputed, iter1, iter2, tol1, tol2)
+   subroutine init_imputer()
 
-      ! sequential Gaussian rejection imputation
+      !
+      ! initialize the NMR imputer by building reference distributions
+      ! and allocating the required arrays
+      !
 
-      type(variogram), intent(inout) :: pool(:)
-      integer, intent(in) :: nreals, nsearch
-      integer, intent(in) :: iter1, iter2
-      real(8), intent(in) :: tol1, tol2
-      real(8), allocatable, intent(out) :: imputed(:, :, :) ! (ndata, nfact, nreals)
-
-      ! kdtree required variables
-      !   type(kdtree2), pointer :: tree
-      type(kdtrees) :: trees(ngvarg) ! array of pointers
-      type(kdtree2_result), allocatable :: results(:)
-      integer :: nfound
-
-      ! normal equations
-      real(8), allocatable :: rhs(:), lhs(:, :), kwts(:)
-      real(8), allocatable :: cmeans(:), cstdevs(:)
-      integer, allocatable :: nuse(:, :), useidx(:, :)
-
-      ! imputation
-      real(8), allocatable :: sim(:, :)
-      real(8), allocatable :: anisxyz(:, :)
-      integer, allocatable :: isim(:, :), randpath(:)
-      integer, allocatable :: factpath(:)
-      real(8) :: zimp1(1), yimp1(1, ngvarg + 1)
-      real(8) :: zimp2(1), yimp2(1, ngvarg + 1)
-      real(8) :: ztry(1), ytry(1, ngvarg + 1)
-      real(8) :: p, xp, gmin, gmax
-      real(8) :: axyz(3)
-      integer :: simidx, ierr
-      real(8) :: diff1, diff2, pert
-      integer :: nfact
-
-      ! reference distribution
-      integer, parameter :: nsamp = 1000000
-      integer :: nlook
-      real(8) :: zref(nsamp)
-      real(8) :: yref(nsamp, ngvarg + 1)
-      real(8), allocatable :: nsref(:)
-      real(8) :: usnsref(nsamp)
-      real(8) :: minref, maxref
-
-      ! dynamic tolerances
-      real(8), allocatable :: vsort(:), wsort(:), vord(:)
-      real(8), allocatable :: vcdf(:)
-      real(8) :: qv, qdiff
-      integer :: qidx, qj
-
-      ! indexes
-      integer :: i, j, k1, k2, igv, ix, iy, fi, nst, ireal, luidx
+      integer :: i, igv, ierr
 
       ! allocate arrays based on number of data and max search
       allocate (rhs(nsearch), lhs(nsearch, nsearch), kwts(nsearch))
@@ -95,6 +95,11 @@ contains
       allocate (cmeans(ngvarg + 1), cstdevs(ngvarg + 1)) ! +1 for nugget
       allocate (imputed(ndata, ngvarg + 2, nreals)) ! +2 for nugget and zval
       allocate (zinit(ndata, nreals)) ! +2 for nugget and zval
+      allocate (yref(nsamp, ngvarg + 1))
+      allocate (trees(ngvarg))
+
+      ! intization simulation indicator
+      isim = 0
 
       ! build reference distribution for transformations
       call build_refcdf(nsamp, zref, nsref, yref, usnsref) ! this also calc norm moments
@@ -145,293 +150,371 @@ contains
                                            sort=.true., rearrange=.true.)
       end do
 
+   end subroutine init_imputer
+
+   subroutine nmr_imputer(pool, ireal, nsearch, imputed, iter1, iter2, &
+                          tol1, tol2, nresim, rsidx, idxs)
       !
-      ! main loop over realizations
+      ! sequential Gaussian rejection imputation
       !
-      REALLOOP: do ireal = 1, nreals
 
-         write (*, *) "imputing realization", ireal
+      ! inputs
+      type(variogram), intent(inout) :: pool(:)
+      integer, intent(in) :: ireal, nsearch
+      integer, intent(in) :: iter1, iter2
+      real(8), intent(in) :: tol1, tol2
+      real(8), intent(out) :: imputed(:, :, :) ! (ndata, nfact, nreals)
+      integer, intent(out) :: nresim
+      integer, allocatable, intent(out) :: rsidx(:)
+      integer, optional, intent(in) :: idxs(:)
 
-         ! define random path through nodes
-         randpath = [(i, i=1, ndata)]
-         call shuffle(randpath)
+      ! imputation
+      integer, allocatable :: factpath(:)
+      real(8) :: zimp1(1), yimp1(1, ngvarg + 1)
+      real(8) :: zimp2(1), yimp2(1, ngvarg + 1)
+      real(8) :: ztry(1), ytry(1, ngvarg + 1)
+      real(8) :: p, xp
+      real(8) :: axyz(3)
+      integer :: simidx, ierr
+      real(8) :: diff1, diff2, pert
+      integer :: nfound
 
-         ! all location are initially unsimulated
-         isim = 0
-         useidx = 0
-         nuse = 0
-         nlook = 0
+      ! resimulation
+      integer, parameter :: nreset = 6 ! simidx + 5 neighbours
+      integer :: nr ! number of resims
+      integer :: reset_idx(nreset)
+      integer :: que(ndata*nreset) ! max possible size
+      logical :: iresim
+
+      ! dynamic tolerances
+      real(8) :: qv, qdiff
+      integer :: qidx, qj
+
+      ! indexes
+      integer :: i, j, k1, k2, igv, iy, fi, luidx
+
+      !
+      ! define random path through nodes
+      !
+      randpath = [(i, i=1, ndata)]
+      call shuffle(randpath)
+
+      ! resimulaiton flag
+      iresim = .false.
+      if (nresim .gt. 0) iresim = .true.
+
+      ! all location are initially unsimulated
+      if (.not. iresim) isim = 0 ! only reset if not resimulating
+      useidx = 0
+      nuse = 0
+      nlook = 0
+
+      ! reset resim counter every realization
+      nr = 0
+
+      !
+      ! loop over data locations
+      !
+      DATALOOP: do i = 1, ndata
+
+         ! get random simulation index
+         simidx = randpath(i)
+
+         ! consider a subset of indices?
+         if (present(idxs)) then
+            if (.not. any(idxs .eq. simidx)) cycle
+         end if
 
          !
-         ! loop over data locations
+         ! loop over factors at this simidx
          !
-         DATALOOP: do i = 1, ndata
+         FACTLOOP: do igv = 1, ngvarg
 
-            ! get random simulation index
-            simidx = randpath(i)
+            ! anisotropic coord for this simidx
+            axyz = matmul(pool(igv)%rm(:, :, nst), xyz(:, simidx))
 
+            ! query the tree for this location
+            call kdtree2_r_nearest(tp=trees(igv)%tree, qv=axyz, &
+                                   r2=pool(igv)%aa(nst)**2, nfound=nfound, &
+                                   nalloc=ndata, results=results)
             !
-            ! loop over factors at this simidx
+            ! loop over samples found in search
             !
-            FACTLOOP: do igv = 1, ngvarg
+            nuse(simidx, igv) = 0
+            do j = 1, nfound
 
-               ! anisotropic coord for this simidx
-               axyz = matmul(pool(igv)%rm(:, :, nst), xyz(:, simidx))
+               ! check if this data index is the simulation index
+               if (results(j)%idx .eq. simidx) cycle
 
-               ! query the tree for this location
-               call kdtree2_r_nearest(tp=trees(igv)%tree, qv=axyz, &
-                                      r2=pool(igv)%aa(nst)**2, nfound=nfound, &
-                                      nalloc=ndata, results=results)
-               !
-               ! loop over samples found in search
-               !
-               nuse(simidx, igv) = 0
-               do j = 1, nfound
+               ! check if this data index is simulated or not
+               if (isim(results(j)%idx, igv) .eq. 0) cycle ! no conditioning value here
 
-                  ! check if this data index is the simulation index
-                  if (results(j)%idx .eq. simidx) cycle
+               ! meet minimum covariance? (not collocated)
+               rhs(1) = get_cov(pool(igv), xyz(:, simidx), xyz(:, results(j)%idx))
+               if (rhs(1) .lt. MINCOV) cycle
 
-                  ! check if this data index is simulated or not
-                  if (isim(results(j)%idx, igv) .eq. 0) cycle ! no conditioning value here
+               ! if we got this far increment number found at ith data location
+               nuse(simidx, igv) = nuse(simidx, igv) + 1
 
-                  ! meet minimum covariance? (not collocated)
-                  rhs(1) = get_cov(pool(igv), xyz(:, simidx), xyz(:, results(j)%idx))
-                  if (rhs(1) .lt. MINCOV) cycle
+               ! track conditioning indices found at ith data location
+               useidx(nuse(simidx, igv), simidx) = results(j)%idx
 
-                  ! if we got this far increment number found at ith data location
-                  nuse(simidx, igv) = nuse(simidx, igv) + 1
+               ! have we met the max search?
+               if (nuse(simidx, igv) .ge. nsearch) exit
 
-                  ! track conditioning indices found at ith data location
-                  useidx(nuse(simidx, igv), simidx) = results(j)%idx
+            end do
 
-                  ! have we met the max search?
-                  if (nuse(simidx, igv) .ge. nsearch) exit
+            ! build and solve normal equations
+            if (nuse(simidx, igv) .gt. 0) then
+               call krige(pool(igv), xyz, rhs, lhs, kwts, nuse(:, igv), useidx, &
+                          sim(:, igv), simidx, cmeans(igv), cstdevs(igv))
+            else
+               ! if no conditioning the distribution is N(0,1)
+               cmeans(igv) = 0.d0
+               cstdevs(igv) = 1.d0
+            end if
 
-               end do
+            ! min stdev to prevent getting stuck?
+            if (cstdevs(igv) .lt. 0.1) cstdevs(igv) = 0.1
 
-               ! build and solve normal equations
-               if (nuse(simidx, igv) .gt. 0) then
-                  call krige(pool(igv), xyz, rhs, lhs, kwts, nuse(:, igv), useidx, &
-                             sim(:, igv), simidx, cmeans(igv), cstdevs(igv))
-               else
-                  ! if no conditioning the distribution is N(0,1)
-                  cmeans(igv) = 0.d0
-                  cstdevs(igv) = 1.d0
-               end if
+            ! update this location and factor as simulated
+            isim(simidx, igv) = 1
 
-               ! min stdev to prevent getting stuck?
-               if (cstdevs(igv) .lt. 0.1) cstdevs(igv) = 0.1
+         end do FACTLOOP
 
-               ! update this location and factor as simulated
-               isim(simidx, igv) = 1
+         ! cmean and cstdev for nugget
+         cmeans(ngvarg + 1) = 0.d0
+         cstdevs(ngvarg + 1) = 1.d0
 
-            end do FACTLOOP
+         !
+         ! dyanmic tolerances
+         !
+         ! get the quantile of the variable we are trying to match
+         ! so we can find the corresponding activation in the refdist
+         !
+         call locate(vsort, ndata, 1, ndata, var(simidx), qj)
+         qj = min(max(1, qj), (ndata - 1))
+         qv = powint(vsort(qj), vsort(qj + 1), vcdf(qj), vcdf(qj + 1), &
+                     var(simidx), 1.d0)
 
-            ! cmean and cstdev for nugget
-            cmeans(ngvarg + 1) = 0.d0
-            cstdevs(ngvarg + 1) = 1.d0
+         ! find the index in nsamp that corresponds to qv
+         qidx = int(nsamp*qv)
 
-            !
-            ! dyanmic tolerances
-            !
-            ! get the quantile of the variable we are trying to match
-            ! so we can find the corresponding activation in the refdist
-            !
-            call locate(vsort, ndata, 1, ndata, var(simidx), qj)
-            qj = min(max(1, qj), (ndata - 1))
-            qv = powint(vsort(qj), vsort(qj + 1), vcdf(qj), vcdf(qj + 1), &
-                        var(simidx), 1.d0)
+         ! get the difference between adjacent samples at this
+         ! position in the cdf
+         qdiff = abs(zref(qidx + 1) - zref(qidx))
+         qdiff = (qdiff + abs(zref(qidx - 1) - zref(qidx)))/2.d0
 
-            ! find the index in nsamp that corresponds to qv
-            qidx = int(nsamp*qv)
+         !
+         ! now that we have the conditional moments for each factor,
+         ! repeatedly simulate values and check against the first tolerance
+         !
+         ! coarse search
+         !
+         diff1 = 999.0
+         k1 = 0
 
-            ! get the difference between adjacent samples at this
-            ! position in the cdf
-            qdiff = abs(zref(qidx + 1) - zref(qidx))
-            qdiff = (qdiff + abs(zref(qidx - 1) - zref(qidx)))/2.d0
+         COARSE: do while (diff1 .ge. tol1)
 
-            !
-            ! now that we have the conditional moments for each factor,
-            ! repeatedly simulate values and check against the first tolerance
-            !
-            ! coarse search
-            !
-            diff1 = 999.0
-            k1 = 0
+            k1 = k1 + 1
 
-            COARSE: do while (diff1 .gt. tol1)
+            ! simulate each factor at this simidx
+            do igv = 1, ngvarg + 1
 
-               k1 = k1 + 1
+               p = grnd()
+               call gauinv(p, xp, ierr)
+               sim(simidx, igv) = xp*cstdevs(igv) + cmeans(igv)
 
-               ! simulate each factor at this simidx
-               do igv = 1, ngvarg + 1
-
+               ! enforce reasonable min/max Gaussian values
+               do while ((sim(simidx, igv) .lt. gmin) .or. &
+                         (sim(simidx, igv) .gt. gmax))
+                  ! resimulate if necessary
                   p = grnd()
                   call gauinv(p, xp, ierr)
                   sim(simidx, igv) = xp*cstdevs(igv) + cmeans(igv)
-
-                  ! enforce reasonable min/max Gaussian values
-                  do while ((sim(simidx, igv) .lt. gmin) .or. &
-                            (sim(simidx, igv) .gt. gmax))
-                     ! resimulate if necessary
-                     p = grnd()
-                     call gauinv(p, xp, ierr)
-                     sim(simidx, igv) = xp*cstdevs(igv) + cmeans(igv)
-                  end do
-
                end do
 
-               ! calculate imputed value
-               yimp1 = reshape(sim(simidx, :), shape=[1, nfact]) ! reshape to preserve first dim
-               call network_forward(nnet, yimp1, zimp1, nstrans=.false., &
+            end do
+
+            ! calculate observed value - activation units
+            yimp1 = reshape(sim(simidx, :), shape=[1, nfact]) ! reshape to preserve first dim
+            call network_forward(nnet, yimp1, zimp1, nstrans=.false., &
+                                 norm=nnet%norm, calc_mom=.false.)
+            zinit(simidx, ireal) = zimp1(1)
+
+            ! calculate observed value - nscore units
+            call transform_to_refcdf(zimp1(1), zref, nsref, zimp1(1))
+
+            ! get difference with true data value
+            diff1 = abs(zimp1(1) - var(simidx))
+
+            ! break if we need to
+            if (k1 .ge. iter1) then
+               write (*, *) "coarse search did not converge after", iter1, &
+                  "iterations at data index", simidx, "diff=", diff1
+
+               ! do j = 1, nfact
+               !    write (*, *) cmeans(j), cstdevs(j)
+               ! end do
+
+               ! write (*, *) " "
+               ! write (*, *) yimp1
+               ! write (*, *) " "
+
+               exit
+            end if
+
+         end do COARSE
+
+         !
+         ! if the coarse search doesn't converge track the locations
+         ! for resimulation
+         !
+         if (diff1 .ge. tol1) then
+
+            ! track number of resets
+            nr = nr + 1
+
+            ! get neighbouring indices to reset
+            do j = 1, nreset
+               reset_idx(j) = results(j)%idx
+            end do
+
+            ! track data indices so we can revisit them
+            que((nr - 1)*nreset + 1:nr*nreset) = reset_idx
+
+            ! ! cycle to start a new iteration of DATALOOP
+            ! cycle
+
+         end if
+
+         !
+         ! yimp1 contains imputed values which meet the first tolerance; now
+         ! polish the previous solution and check against the second tolerance
+         !
+         ! current diff b/w imputed and true values
+         diff2 = diff1
+
+         ! current imputation values
+         zimp2 = zimp1
+         yimp2 = yimp1
+         ytry = yimp1
+
+         !
+         ! solution polishing
+         !
+         k2 = 0
+         POLISH: do while (diff2 .ge. tol2)
+
+            k2 = k2 + 1
+
+            ! random path though the factors
+            factpath = [(fi, fi=1, nfact - 1)]
+            call shuffle(factpath)
+
+            do j = 1, nfact - 1
+
+               iy = factpath(j)
+
+               ! perturb a factor
+               ! qdiff = tol2
+               pert = -qdiff + grnd()*(qdiff - (-qdiff))
+               ytry(1, iy) = yimp2(1, iy) + pert
+
+               ! revert to previous value if the new one is extreme
+               if (ytry(1, iy) .lt. gmin) then
+                  ! write (*, *) "extreme value in polish", ytry(1, iy)
+                  ytry(1, iy) = yimp2(1, iy)
+               end if
+
+               if (ytry(1, iy) .gt. gmax) then
+                  ! write (*, *) "extreme value in polish", ytry(1, iy)
+                  ytry(1, iy) = yimp2(1, iy)
+               end if
+
+               ! calculate the new imputed value
+               call network_forward(nnet, ytry, ztry, nstrans=.false., &
                                     norm=nnet%norm, calc_mom=.false.)
+               zinit(simidx, ireal) = ztry(1)
+               call transform_to_refcdf(ztry(1), zref, nsref, ztry(1))
 
-               zinit(simidx, ireal) = zimp1(1)
-
-               call transform_to_refcdf(zimp1(1), zref, nsref, zimp1(1))
-
-               ! get difference with true data value
-               diff1 = abs(zimp1(1) - var(simidx))
-
-               ! break if we need to
-               if (k1 .ge. iter1) then
-                  write (*, *) "coarse search did not converge after", iter1, &
-                     "iterations at data index", simidx, "diff=", diff1
-
-                  ! do j = 1, nfact
-                  !    write (*, *) cmeans(j), cstdevs(j)
-                  ! end do
-
-                  ! write (*, *) " "
-                  ! write (*, *) yimp1
-                  ! write (*, *) " "
-
-                  exit
+               ! did this pertubation improve the solution?
+               if (abs(ztry(1) - var(simidx)) .lt. diff2) then
+                  ! update imputed values
+                  yimp2(1, iy) = ytry(1, iy)
+                  zimp2 = ztry
+                  ! update the new difference
+                  diff2 = abs(ztry(1) - var(simidx))
+               else
+                  ! revert back to the previous value
+                  ytry(1, iy) = yimp2(1, iy)
                end if
 
-            end do COARSE
+            end do
 
-            !
-            ! yimp1 contains imputed values which meet the first tolerance; now
-            ! polish the previous solution and check against the second tolerance
-            !
-            ! current diff b/w imputed and true values
-            diff2 = diff1
+            ! break if we need to
+            if (k2 .ge. iter2) then
+               write (*, *) " "
+               write (*, *) "solution polishing did not converge after", iter2, &
+                  "iterations at data index", simidx, "diff=", diff2
 
-            ! current imputation values
-            zimp2 = zimp1
-            yimp2 = yimp1
-            ytry = yimp1
+               ! write (*, *) yimp2
+               ! write (*, *) " "
 
-            !
-            ! solution polishing
-            !
-            k2 = 0
-            POLISH: do while (diff2 .gt. tol2)
+               exit
+            end if
 
-               k2 = k2 + 1
+         end do POLISH
 
-               ! random path though the factors
-               factpath = [(fi, fi=1, nfact - 1)]
-               call shuffle(factpath)
+         ! !
+         ! ! If the polish doesn't converge, grab the correct zval and corresponding
+         ! ! factors from the reference look up table. If there are only a few
+         ! ! samples that dont converge, variogram reproduction shound't be affected
+         ! ! too much.
+         ! !
+         ! if (diff2 .gt. tol2) then
 
-               do j = 1, nfact - 1
+         !    ! grab NS z value and corresponding factors from table
+         !    call lookup_table(var(simidx), usnsref, yref, zimp2, yimp2, luidx)
+         !    zinit(simidx, ireal) = zref(luidx)
 
-                  iy = factpath(j)
+         !    ! track lookups
+         !    nlook = nlook + 1
 
-                  ! perturb a factor
-                  pert = -qdiff + grnd()*(qdiff - (-qdiff))
-                  ytry(1, iy) = yimp2(1, iy) + pert
+         ! end if
 
-                  ! revert to previous value if the new one is extreme
-                  if (ytry(1, iy) .lt. gmin) then
-                     ! write (*, *) "extreme value in polish", ytry(1, iy)
-                     ytry(1, iy) = yimp2(1, iy)
-                  end if
+         !
+         ! update the conditioning values for this realization
+         !
+         sim(simidx, :) = yimp2(1, :)
 
-                  if (ytry(1, iy) .gt. gmax) then
-                     ! write (*, *) "extreme value in polish", ytry(1, iy)
-                     ytry(1, iy) = yimp2(1, iy)
-                  end if
+         !
+         ! store the final values
+         !
+         imputed(simidx, 1:nfact, ireal) = yimp2(1, :)
+         imputed(simidx, nfact + 1, ireal) = zimp2(1)
 
-                  ! calculate the new imputed value
-                  call network_forward(nnet, ytry, ztry, nstrans=.false., &
-                                       norm=nnet%norm, calc_mom=.false.)
-                  zinit(simidx, ireal) = ztry(1)
-                  call transform_to_refcdf(ztry(1), zref, nsref, ztry(1))
+      end do DATALOOP
 
-                  ! did this pertubation improve the solution?
-                  if (abs(ztry(1) - var(simidx)) .lt. diff2) then
-                     ! update imputed values
-                     yimp2(1, iy) = ytry(1, iy)
-                     zimp2 = ztry
-                     ! update the new difference
-                     diff2 = abs(ztry(1) - var(simidx))
-                  else
-                     ! revert back to the previous value
-                     ytry(1, iy) = yimp2(1, iy)
-                  end if
+      if (nlook .gt. 0) write (*, *) nlook, "values taken from lookup table"
 
-               end do
-
-               ! break if we need to
-               if (k2 .ge. iter2) then
-                  write (*, *) " "
-                  write (*, *) "solution polishing did not converge after", iter2, &
-                     "iterations at data index", simidx, "diff=", diff2
-
-                  ! write (*, *) yimp2
-                  ! write (*, *) " "
-
-                  exit
-               end if
-
-            end do POLISH
-
-            ! !
-            ! ! If the polish doesn't converge, grab the correct zval and corresponding
-            ! ! factors from the reference look up table. If there are only a few
-            ! ! samples that dont converge, variogram reproduction shound't be affected
-            ! ! too much.
-            ! !
-            ! ! this tolerance is arbitrary (could be tol2?)
-            ! if (diff2 .gt. tol2) then
-
-            !    ! grab NS z value and corresponding factors from table
-            !    call lookup_table(var(simidx), usnsref, yref, zimp2, yimp2, luidx)
-            !    zinit(simidx, ireal) = zref(luidx)
-
-            !    ! write (*, *) "conditional means:", cmeans
-            !    ! write (*, *) "conditional stdevs:", cstdevs
-
-            !    ! track lookups
-            !    nlook = nlook + 1
-
-            ! end if
-
-            !
-            ! update the conditioning values for this realization
-            !
-            sim(simidx, :) = yimp2(1, :)
-
-            !
-            ! store the final values
-            !
-            imputed(simidx, 1:nfact, ireal) = yimp2(1, :)
-            imputed(simidx, nfact + 1, ireal) = zimp2(1)
-
-         end do DATALOOP
-
-         if (nlook .gt. 0) write (*, *) nlook, "values taken from lookup table"
-
-      end do REALLOOP
+      ! grab the resim indices from the que array if required
+      nresim = nr
+      if (nr .gt. 0) then
+         allocate (rsidx(nr*nreset))
+         rsidx = que(1:nr*nreset)
+      else
+         allocate (rsidx(1))
+         rsidx = 0
+      end if
 
    end subroutine nmr_imputer
 
    subroutine krige(vm, coords, rhs, lhs, kwts, nuse, useidx, &
                     sim, simidx, cmean, cstdev)
-
+      !
       ! simple kriging conditional mean and variance
+      !
 
       integer, intent(in) :: nuse(:), useidx(:, :), simidx
       real(8), intent(in) :: coords(:, :), sim(:)
@@ -476,8 +559,10 @@ contains
 
    subroutine build_refcdf(nsamp, zref, nsref, yref, usnsref)
 
+      !
       ! build reference CDF for the normal score transform
       ! of imputed values
+      !
 
       integer, intent(in) :: nsamp ! num samples in ref CDF
       real(8), intent(inout) :: zref(nsamp) ! sorted zref
@@ -523,8 +608,10 @@ contains
 
    subroutine transform_to_refcdf(z, zref, nsref, zimp)
 
+      !
       ! normal score transform network output according to
       ! specified reference distribution
+      !
 
       real(8), intent(in) :: z ! network output
       real(8), intent(in) :: zref(:) ! sorted zvalues
