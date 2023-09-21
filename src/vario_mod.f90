@@ -1,5 +1,6 @@
 module vario_mod
 
+   use covasubs, only: get_cov
    use rotationmatrix, only: set_rmat
    use types_mod, only: variogram
 
@@ -70,6 +71,73 @@ contains
       sill = sumsqs - mean*mean
 
    end subroutine calc_expsill
+
+   subroutine gammabar(vm, xsiz, ysiz, zsiz, nx, ny, nz, gamb)
+
+      !
+      ! average variogram value of model vm in volume (xsiz, ysiz, zsiz)
+      ! discretized by (nx, ny, nz)
+      !
+
+      ! paramerers
+      type(variogram), intent(in) :: vm
+      real(8), intent(in) :: xsiz, ysiz, zsiz
+      integer, intent(in) :: nx, ny, nz
+      real(8), intent(out) :: gamb
+
+      ! locals
+      real(8) :: maxcov, cov
+      real(8) :: xmn, ymn, zmn
+      real(8) :: xsz, ysz, zsz
+      real(8) :: xzero, yzero, zzero
+      integer :: ix, iy, iz
+      integer :: jx, jy, jz
+      real(8) :: xxi, yyi, zzi
+      real(8) :: xxj, yyj, zzj
+
+      ! discretization setup
+      xsz = xsiz/real(nx)
+      ysz = ysiz/real(ny)
+      zsz = zsiz/real(nz)
+      xmn = xsz/2.d0
+      ymn = ysz/2.d0
+      zmn = zsz/2.d0
+      xzero = xsz*0.0001
+      yzero = ysz*0.0001
+      zzero = zsz*0.0001
+
+      ! maximum covariance (variance)
+      maxcov = get_cov(vm, [0.d0, 0.d0, 0.d0], [0.d0, 0.d0, 0.d0])
+      gamb = 0.d0
+
+      ! main loop over the volume
+      do ix = 1, nx
+         xxi = xmn + real(ix - 1)*xsz + xzero
+         do iy = 1, ny
+            yyi = ymn + real(iy - 1)*ysz + yzero
+            do iz = 1, nz
+               zzi = zmn + real(iz - 1)*zsz + zzero
+               ! loop over pairs
+               do jx = 1, nx
+                  xxj = xmn + real(jx - 1)*xsz
+                  do jy = 1, ny
+                     yyj = ymn + real(jy - 1)*ysz
+                     do jz = 1, nz
+                        zzj = zmn + real(jz - 1)*zsz
+                        ! calculate covariance for this pair
+                        cov = get_cov(vm, [xxi, yyi, zzi], [xxj, yyj, zzj])
+                        gamb = gamb + (maxcov - cov)
+                     end do
+                  end do
+               end do
+            end do
+         end do
+      end do
+
+      ! final measure
+      gamb = gamb/(real(nx*ny*nz)**2)
+
+   end subroutine gammabar
 
    subroutine set_sill(vm)
 

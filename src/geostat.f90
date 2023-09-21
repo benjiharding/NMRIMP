@@ -52,6 +52,10 @@ module geostat
    type(kdtrees), allocatable :: trees(:) ! array of pointers
    type(kdtree2_result), allocatable :: results(:)
 
+   ! gammabar for sorting by continuity
+   real(8) :: gb
+   real(8), allocatable :: gbar(:), gbaridx(:)
+
    ! data variables
    real(8), allocatable :: var(:)
    real(8), allocatable :: nsvar(:)
