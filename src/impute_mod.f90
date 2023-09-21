@@ -5,7 +5,7 @@ module impute_mod
    use mtmod, only: grnd, gaussrnd
    use network_mod, only: network_forward
    use types_mod, only: variogram, network, kdtrees
-   use vario_mod, only: set_sill, set_rotmatrix
+   use vario_mod, only: set_sill, set_rotmatrix, gammabar
    use covasubs, only: get_cov
    use constants, only: MINCOV, IMPEPS, EPSLON, SMALLDBLE
    use subs, only: shuffle, gauinv, sortem, nscore, &
@@ -53,19 +53,17 @@ contains
          do while (nresim .gt. 0)
 
             j = j + 1
-            if (j .gt. 5) exit
-            idxs = rsidx
+            if (j .gt. 10) exit
 
             write (*, *) "resimulating at", nresim, "locations"
 
             ! reset the sim indicators for these locations
+            idxs = rsidx
             isim(rsidx, :) = 0
 
             ! call the imputer again
             call nmr_imputer(pool, ireal, nsearch, imputed, iter1, iter2, &
                              tol1, tol2, nresim, rsidx, idxs)
-
-            ! if (j .gt. 5) exit
 
          end do
 
@@ -97,6 +95,7 @@ contains
       allocate (zinit(ndata, nreals)) ! +2 for nugget and zval
       allocate (yref(nsamp, ngvarg + 1))
       allocate (trees(ngvarg))
+      allocate (gbar(ngvarg), gbaridx(ngvarg))
 
       ! intization simulation indicator
       isim = 0
@@ -150,6 +149,18 @@ contains
                                            sort=.true., rearrange=.true.)
       end do
 
+      ! calcualte gammabar for each factor
+      gbaridx = [(igv, igv=1, ngvarg)]
+      gbar = 0.d0
+      do igv = 1, ngvarg
+         call gammabar(pool(igv), 10.d0, 10.d0, 10.d0, 4, 4, 4, gb)
+         gbar(igv) = gb
+      end do
+
+      ! this sort is ascending - most continuous is last
+      call sortem(1, ngvarg, gbar, 1, gbaridx, gbar, gbar, gbar, &
+                  gbar, gbar, gbar, gbar)
+
    end subroutine init_imputer
 
    subroutine nmr_imputer(pool, ireal, nsearch, imputed, iter1, iter2, &
@@ -179,6 +190,10 @@ contains
       real(8) :: diff1, diff2, pert
       integer :: nfound
 
+      ! factor sensitivity
+      real(8), allocatable :: delta(:)
+      real(8) :: dz
+
       ! resimulation
       integer, parameter :: nreset = 6 ! simidx + 5 neighbours
       integer :: nr ! number of resims
@@ -192,6 +207,8 @@ contains
 
       ! indexes
       integer :: i, j, k1, k2, igv, iy, fi, luidx
+
+      allocate (delta(ngvarg))
 
       !
       ! define random path through nodes
@@ -302,8 +319,12 @@ contains
 
          ! get the difference between adjacent samples at this
          ! position in the cdf
-         qdiff = abs(zref(qidx + 1) - zref(qidx))
-         qdiff = (qdiff + abs(zref(qidx - 1) - zref(qidx)))/2.d0
+         select case (nnet%af)
+         case (1:2) ! symmetric
+            qdiff = abs(nsref(qidx + 1) - nsref(qidx - 1))/2.d0
+         case (3:6) ! asymmetric
+            qdiff = abs(zref(qidx + 1) - zref(qidx - 1))/2.d0
+         end select
 
          !
          ! now that we have the conditional moments for each factor,
@@ -314,7 +335,7 @@ contains
          diff1 = 999.0
          k1 = 0
 
-         COARSE: do while (diff1 .ge. tol1)
+         COARSE: do while (diff1 .gt. tol1)
 
             k1 = k1 + 1
 
@@ -404,7 +425,7 @@ contains
          ! solution polishing
          !
          k2 = 0
-         POLISH: do while (diff2 .ge. tol2)
+         POLISH: do while (diff2 .gt. tol2)
 
             k2 = k2 + 1
 
@@ -412,13 +433,14 @@ contains
             factpath = [(fi, fi=1, nfact - 1)]
             call shuffle(factpath)
 
+            ! unform perturbation in [a, b] -> (b-a)*u+b
+            pert = (qdiff - (-qdiff))*grnd() + (-qdiff)
+
             do j = 1, nfact - 1
 
                iy = factpath(j)
 
                ! perturb a factor
-               ! qdiff = tol2
-               pert = -qdiff + grnd()*(qdiff - (-qdiff))
                ytry(1, iy) = yimp2(1, iy) + pert
 
                ! revert to previous value if the new one is extreme
@@ -516,9 +538,9 @@ contains
       ! simple kriging conditional mean and variance
       !
 
+      type(variogram), intent(in) :: vm
       integer, intent(in) :: nuse(:), useidx(:, :), simidx
       real(8), intent(in) :: coords(:, :), sim(:)
-      type(variogram) :: vm
       real(8), intent(inout) :: rhs(:), lhs(:, :), kwts(:)
       real(8), intent(inout) :: cmean, cstdev
       integer :: j, k, test
@@ -556,6 +578,68 @@ contains
       cstdev = sqrt(max(cstdev, 0.0))
 
    end subroutine krige
+
+   subroutine latent_sensitivity(z, y, delta)
+
+      !
+      ! determine what latent factors have the greatest
+      ! influence on zimp
+      !
+
+      ! paramters
+      real(8), intent(in) :: z ! target value
+      real(8), intent(in) :: y(:, :) ! latent vector
+      real(8), intent(out) :: delta(:) ! sorted delta z
+
+      ! locals
+      real(8) :: d(ngvarg), dp(ngvarg), dn(ngvarg)
+      real(8) :: ztmp(1), ytmp(1, size(y))
+      real(8) :: dy, y1, y2
+      real(8) :: a, b, c
+      real(8) :: fidx(ngvarg)
+      integer :: i, j, ierr
+
+      ! factor indices
+      fidx = [(i, i=1, ngvarg)]
+
+      ! maximum step size in probability space
+      call gauinv(0.5d000, y1, ierr)
+      call gauinv(0.525d0, y2, ierr)
+      ! dy = y2 - y1
+      dy = 0.025d0
+
+      ! temporary copy
+      ytmp = y
+      ytmp = reshape(ytmp, shape=[1, ngvarg])
+
+      ! negative step
+      do i = 1, ngvarg
+         ytmp(1, i) = ytmp(1, i) - dy
+         call network_forward(nnet, ytmp, ztmp, nstrans=.false., &
+                              norm=nnet%norm, calc_mom=.false.)
+         call transform_to_refcdf(ztmp(1), zref, nsref, ztmp(1))
+         dn(i) = z - ztmp(1)
+      end do
+
+      ! revert back to original y vector
+      ytmp = y
+      ytmp = reshape(ytmp, shape=[1, ngvarg])
+
+      ! positive step
+      do i = 1, ngvarg
+         ytmp(1, i) = ytmp(1, i) + dy
+         call network_forward(nnet, ytmp, ztmp, nstrans=.false., &
+                              norm=nnet%norm, calc_mom=.false.)
+         call transform_to_refcdf(ztmp(1), zref, nsref, ztmp(1))
+         dp(i) = z - ztmp(1)
+      end do
+
+      ! sort by delta
+      d = abs(dp - dn)
+      call sortem(1, ngvarg, d, 3, fidx, dn, dp, d, d, d, d, d)
+      delta = d
+
+   end subroutine latent_sensitivity
 
    subroutine build_refcdf(nsamp, zref, nsref, yref, usnsref)
 
