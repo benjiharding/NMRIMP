@@ -191,8 +191,9 @@ contains
       integer :: nfound
 
       ! factor sensitivity
-      real(8), allocatable :: delta(:)
-      real(8) :: dz
+      real(8), allocatable :: dp(:), dn(:), didx(:)
+      real(8) :: dy, dz, a
+      logical :: inv
 
       ! resimulation
       integer, parameter :: nreset = 6 ! simidx + 5 neighbours
@@ -206,9 +207,9 @@ contains
       integer :: qidx, qj
 
       ! indexes
-      integer :: i, j, k1, k2, igv, iy, fi, luidx
+      integer :: i, j, k1, k2, igv, iy, fi, luidx, idx
 
-      allocate (delta(ngvarg))
+      allocate (dp(ngvarg), dn(ngvarg), didx(ngvarg))
 
       !
       ! define random path through nodes
@@ -433,8 +434,75 @@ contains
             factpath = [(fi, fi=1, nfact - 1)]
             call shuffle(factpath)
 
-            ! unform perturbation in [a, b] -> (b-a)*u+b
-            pert = (qdiff - (-qdiff))*grnd() + (-qdiff)
+            ! get the direction we need to move and sensitivities
+            dz = var(simidx) - zimp2(1)
+            call latent_sensitivity(zimp2(1), yimp2, dz, dp, dn, didx, a, dy, inv)
+
+            ! zimp is too high, we need to reduce
+            if (dz .lt. 0.d0) then
+
+               ! are we inside the sensitivity tolerances?
+               if (a .gt. 0.d0) then
+
+                  ! increasing y decreases z
+                  if (inv) then ! use dp for dz < 0
+
+                     ! find the factor with the smallest delta that
+                     ! is bigger than dz
+                     idx = findloc(dp, dz, 1)
+
+                     ! do some binary search based on dp(idx)
+
+                  else ! use dn for dz < 0
+                     ! decreasing y decreases z
+
+                     ! find the factor with the smallest delta that
+                     ! is bigger than dz
+                     idx = findloc(dn, dz, 0)
+
+                     ! do some binary search based on dn(idx)
+
+                  end if
+
+                  ! we are outside the senesitvity tolerances
+               else if (a .lt. 0.d0) then
+
+                  if (inv) then ! use dp for dz < 0
+
+                     ! set the most sensitive factor to bound
+                     idx = findloc(dp, dz, 1)
+                     yimp2(1, idx) = yimp2(1, idx) + dy
+
+                     ! calculate the new imputed value
+
+                     ! repeat sensitivity
+
+                  else ! use dn for dz < 0
+
+                     ! set the most sensitive factor to bound
+                     idx = findloc(dn, dz, 0)
+                     yimp2(1, idx) = yimp2(1, idx) - dy
+
+                     ! calculate the new imputed value
+
+                     ! repeat sensitivity
+
+                  end if
+
+               end if
+
+               ! zimp is too low, we need to increase
+            else if (dz .gt. 0.d0) then
+
+               ! inside tol
+               if (a .lt. 0.d0) then
+
+                  ! we are outside the senesitvity tolerances
+               else if (a .gt. 0.d0) then
+
+               end if
+
+            end if
 
             do j = 1, nfact - 1
 
@@ -579,7 +647,7 @@ contains
 
    end subroutine krige
 
-   subroutine latent_sensitivity(z, y, delta)
+   subroutine latent_sensitivity(z, y, dz, dp, dn, didx, a, dy, inv)
 
       !
       ! determine what latent factors have the greatest
@@ -587,17 +655,21 @@ contains
       !
 
       ! paramters
-      real(8), intent(in) :: z ! target value
+      real(8), intent(in) :: z ! current imputed value
       real(8), intent(in) :: y(:, :) ! latent vector
-      real(8), intent(out) :: delta(:) ! sorted delta z
+      real(8), intent(in) :: dz ! current delta with observed
+      real(8), intent(out) :: dp(:), dn(:), didx(:) ! sorted delta z
+      real(8), intent(out) :: a ! measure of in/out tols
+      real(8), intent(out) :: dy ! delta y
+      logical, intent(out) :: inv ! perturbations inverse to sign?
 
       ! locals
-      real(8) :: d(ngvarg), dp(ngvarg), dn(ngvarg)
+      real(8) :: d(ngvarg)
       real(8) :: ztmp(1), ytmp(1, size(y))
-      real(8) :: dy, y1, y2
-      real(8) :: a, b, c
+      real(8) :: y1, y2
+      real(8) :: b, c
       real(8) :: fidx(ngvarg)
-      integer :: i, j, ierr
+      integer :: i, ierr
 
       ! factor indices
       fidx = [(i, i=1, ngvarg)]
@@ -605,12 +677,16 @@ contains
       ! maximum step size in probability space
       call gauinv(0.5d000, y1, ierr)
       call gauinv(0.525d0, y2, ierr)
-      ! dy = y2 - y1
-      dy = 0.025d0
+      dy = y2 - y1
 
       ! temporary copy
       ytmp = y
       ytmp = reshape(ytmp, shape=[1, ngvarg])
+
+      ! if inv is false postive perts increase z, negative
+      ! decrease z. if true sign of pert and the direction
+      ! z moves are inverse
+      inv = .false.
 
       ! negative step
       do i = 1, ngvarg
@@ -620,6 +696,8 @@ contains
          call transform_to_refcdf(ztmp(1), zref, nsref, ztmp(1))
          dn(i) = z - ztmp(1)
       end do
+
+      if (dn(i) .lt. 0.d0) inv = .true.
 
       ! revert back to original y vector
       ytmp = y
@@ -634,10 +712,18 @@ contains
          dp(i) = z - ztmp(1)
       end do
 
-      ! sort by delta
+      ! sort indices by delta
       d = abs(dp - dn)
-      call sortem(1, ngvarg, d, 3, fidx, dn, dp, d, d, d, d, d)
-      delta = d
+      call sortem(1, ngvarg, d, 3, fidx, dp, dn, d, d, d, d, d)
+      didx = fidx
+
+      ! calc metrics of "difficulty"
+      ! a is negative if it falls within the sensitivity
+      ! of a factor
+      b = dz
+      if (dz .lt. 0.d0) c = minval(dn)
+      if (dz .gt. 0.d0) c = maxval(dp)
+      a = b - c
 
    end subroutine latent_sensitivity
 
@@ -729,5 +815,33 @@ contains
       yimp(1, :) = yref(idx, :)
 
    end subroutine lookup_table
+
+   function findloc(arr, x, ltgt) result(idx)
+
+      ! find the first occurence where the
+      ! condition is true
+
+      real(8) :: arr(:), x
+      integer :: ltgt ! .lt. (0) or .gt. (1)
+      integer :: j, idx
+
+      select case (ltgt)
+      case (0)
+         do j = 1, size(arr)
+            if (arr(j) .lt. x) then
+               idx = j
+               exit
+            end if
+         end do
+      case (1)
+         do j = 1, size(arr)
+            if (arr(j) .gt. x) then
+               idx = j
+               exit
+            end if
+         end do
+      end select
+
+   end function findloc
 
 end module impute_mod
