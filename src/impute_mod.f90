@@ -53,7 +53,7 @@ contains
          do while (nresim .gt. 0)
 
             j = j + 1
-            if (j .gt. 10) exit
+            if (j .gt. int(ndata*150)) exit
 
             write (*, *) "resimulating at", nresim, "locations"
 
@@ -181,8 +181,8 @@ contains
 
       ! imputation
       integer, allocatable :: factpath(:)
-      real(8) :: zimp1(1), yimp1(1, ngvarg + 1)
-      real(8) :: zimp2(1), yimp2(1, ngvarg + 1)
+      real(8) :: zimp1, yimp1(1, ngvarg + 1)
+      real(8) :: zimp2, yimp2(1, ngvarg + 1)
       real(8) :: ztry(1), ytry(1, ngvarg + 1)
       real(8) :: p, xp
       real(8) :: axyz(3)
@@ -191,9 +191,11 @@ contains
       integer :: nfound
 
       ! factor sensitivity
-      real(8), allocatable :: dp(:), dn(:), didx(:)
+      real(8), allocatable :: dp(:), dn(:)
+      integer, allocatable :: didx(:)
       real(8) :: dy, dz, a
-      logical :: inv
+      integer :: as
+      logical :: inv(ngvarg)
 
       ! resimulation
       integer, parameter :: nreset = 6 ! simidx + 5 neighbours
@@ -360,15 +362,17 @@ contains
 
             ! calculate observed value - activation units
             yimp1 = reshape(sim(simidx, :), shape=[1, nfact]) ! reshape to preserve first dim
-            call network_forward(nnet, yimp1, zimp1, nstrans=.false., &
-                                 norm=nnet%norm, calc_mom=.false.)
-            zinit(simidx, ireal) = zimp1(1)
+            ! call network_forward(nnet, yimp1, zimp1, nstrans=.false., &
+            !                      norm=nnet%norm, calc_mom=.false.)
+            ! zinit(simidx, ireal) = zimp1(1)
 
-            ! calculate observed value - nscore units
-            call transform_to_refcdf(zimp1(1), zref, nsref, zimp1(1))
+            ! ! calculate observed value - nscore units
+            ! call transform_to_refcdf(zimp1(1), zref, nsref, zimp1(1))
 
             ! get difference with true data value
-            diff1 = abs(zimp1(1) - var(simidx))
+            ! diff1 = abs(zimp1(1) - var(simidx))
+            zimp1 = f(yimp1)
+            diff1 = abs(zimp1 - var(simidx))
 
             ! break if we need to
             if (k1 .ge. iter1) then
@@ -430,117 +434,74 @@ contains
 
             k2 = k2 + 1
 
-            ! random path though the factors
-            factpath = [(fi, fi=1, nfact - 1)]
-            call shuffle(factpath)
-
-            ! get the direction we need to move and sensitivities
-            dz = var(simidx) - zimp2(1)
-            call latent_sensitivity(zimp2(1), yimp2, dz, dp, dn, didx, a, dy, inv)
+            ! get the direction we need to move and factor sensitivities
+            dz = var(simidx) - zimp2
+            call latent_sensitivity(zimp2, yimp2, dz, dp, dn, didx, a, dy, inv)
 
             ! zimp is too high, we need to reduce
             if (dz .lt. 0.d0) then
 
-               ! are we inside the sensitivity tolerances?
+               ! are we inside the sensitivity tolerances for negative dz?
+               ! if so we can simply find a solution
                if (a .gt. 0.d0) then
 
-                  ! increasing y decreases z
-                  if (inv) then ! use dp for dz < 0
+                  ! find the factor with the smallest delta that
+                  ! is bigger than dz
+                  ! idx = findloc(abs(dp), abs(dz), 1)
+                  call findidx(dp, dn, dz, 0, idx, as)
 
-                     ! find the factor with the smallest delta that
-                     ! is bigger than dz
-                     idx = findloc(dp, dz, 1)
+                  ! do some binary search based on dp(idx)
+                  ! this updates diff2 which should break do while condition
+                  call binary_search(var(simidx), yimp2, dy, as, didx(idx), tol2, &
+                                     zimp2, diff2)
 
-                     ! do some binary search based on dp(idx)
-
-                  else ! use dn for dz < 0
-                     ! decreasing y decreases z
-
-                     ! find the factor with the smallest delta that
-                     ! is bigger than dz
-                     idx = findloc(dn, dz, 0)
-
-                     ! do some binary search based on dn(idx)
-
-                  end if
-
-                  ! we are outside the senesitvity tolerances
                else if (a .lt. 0.d0) then
+                  ! if we are outside the senesitvity tolerances for negative
+                  ! dz, we need to perturb and reasses the sensitivities
 
-                  if (inv) then ! use dp for dz < 0
+                  ! set the most sensitive factor to bound and update z;
+                  zimp2 = set_to_bound(dy, dp, dn, yimp2, didx, 0)
 
-                     ! set the most sensitive factor to bound
-                     idx = findloc(dp, dz, 1)
-                     yimp2(1, idx) = yimp2(1, idx) + dy
+                  ! perhaps we need to iterate over a few factors sorted
+                  ! by gammebar here
 
-                     ! calculate the new imputed value
-
-                     ! repeat sensitivity
-
-                  else ! use dn for dz < 0
-
-                     ! set the most sensitive factor to bound
-                     idx = findloc(dn, dz, 0)
-                     yimp2(1, idx) = yimp2(1, idx) - dy
-
-                     ! calculate the new imputed value
-
-                     ! repeat sensitivity
-
-                  end if
-
+                  ! check the new difference
+                  diff2 = abs(zimp2 - var(simidx))
                end if
 
-               ! zimp is too low, we need to increase
             else if (dz .gt. 0.d0) then
+               ! zimp is too low, we need to increase
 
-               ! inside tol
+               ! are we inside the sensitivity tolerances for postive dz?
+               ! if so we can simply find a solution
                if (a .lt. 0.d0) then
 
-                  ! we are outside the senesitvity tolerances
+                  ! find the factor with the smallest delta that
+                  ! is bigger than dz
+                  ! idx = findloc(abs(dp), abs(dz), 1)
+                  call findidx(dp, dn, dz, 1, idx, as)
+
+                  ! do some binary search based on dp(idx)
+                  ! this updates diff2 which should break do while condition
+                  call binary_search(var(simidx), yimp2, dy, as, didx(idx), tol2, &
+                                     zimp2, diff2)
+
                else if (a .gt. 0.d0) then
+                  ! if we are outside the senesitvity tolerances for
+                  ! positive dz, we need to perturb and reasses the sensitivities
+
+                  ! set the most sensitive factor to bound and update z;
+                  zimp2 = set_to_bound(dy, dp, dn, yimp2, didx, 1)
+
+                  ! perhaps we need to iterate over a few factors sorted
+                  ! by gammebar here
+
+                  ! check the new difference
+                  diff2 = abs(zimp2 - var(simidx))
 
                end if
 
             end if
-
-            do j = 1, nfact - 1
-
-               iy = factpath(j)
-
-               ! perturb a factor
-               ytry(1, iy) = yimp2(1, iy) + pert
-
-               ! revert to previous value if the new one is extreme
-               if (ytry(1, iy) .lt. gmin) then
-                  ! write (*, *) "extreme value in polish", ytry(1, iy)
-                  ytry(1, iy) = yimp2(1, iy)
-               end if
-
-               if (ytry(1, iy) .gt. gmax) then
-                  ! write (*, *) "extreme value in polish", ytry(1, iy)
-                  ytry(1, iy) = yimp2(1, iy)
-               end if
-
-               ! calculate the new imputed value
-               call network_forward(nnet, ytry, ztry, nstrans=.false., &
-                                    norm=nnet%norm, calc_mom=.false.)
-               zinit(simidx, ireal) = ztry(1)
-               call transform_to_refcdf(ztry(1), zref, nsref, ztry(1))
-
-               ! did this pertubation improve the solution?
-               if (abs(ztry(1) - var(simidx)) .lt. diff2) then
-                  ! update imputed values
-                  yimp2(1, iy) = ytry(1, iy)
-                  zimp2 = ztry
-                  ! update the new difference
-                  diff2 = abs(ztry(1) - var(simidx))
-               else
-                  ! revert back to the previous value
-                  ytry(1, iy) = yimp2(1, iy)
-               end if
-
-            end do
 
             ! break if we need to
             if (k2 .ge. iter2) then
@@ -576,13 +537,14 @@ contains
          !
          ! update the conditioning values for this realization
          !
+         zinit(simidx, ireal) = nmr(yimp2)
          sim(simidx, :) = yimp2(1, :)
 
          !
          ! store the final values
          !
          imputed(simidx, 1:nfact, ireal) = yimp2(1, :)
-         imputed(simidx, nfact + 1, ireal) = zimp2(1)
+         imputed(simidx, nfact + 1, ireal) = zimp2
 
       end do DATALOOP
 
@@ -658,14 +620,15 @@ contains
       real(8), intent(in) :: z ! current imputed value
       real(8), intent(in) :: y(:, :) ! latent vector
       real(8), intent(in) :: dz ! current delta with observed
-      real(8), intent(out) :: dp(:), dn(:), didx(:) ! sorted delta z
+      real(8), intent(out) :: dp(:), dn(:)
+      integer, intent(out) :: didx(:) ! sorted delta z
       real(8), intent(out) :: a ! measure of in/out tols
       real(8), intent(out) :: dy ! delta y
-      logical, intent(out) :: inv ! perturbations inverse to sign?
+      logical, intent(out) :: inv(:) ! perturbations inverse to sign?
 
       ! locals
       real(8) :: d(ngvarg)
-      real(8) :: ztmp(1), ytmp(1, size(y))
+      real(8) :: ytmp(size(y, dim=1), size(y, dim=2))
       real(8) :: y1, y2
       real(8) :: b, c
       real(8) :: fidx(ngvarg)
@@ -679,10 +642,6 @@ contains
       call gauinv(0.525d0, y2, ierr)
       dy = y2 - y1
 
-      ! temporary copy
-      ytmp = y
-      ytmp = reshape(ytmp, shape=[1, ngvarg])
-
       ! if inv is false postive perts increase z, negative
       ! decrease z. if true sign of pert and the direction
       ! z moves are inverse
@@ -690,42 +649,114 @@ contains
 
       ! negative step
       do i = 1, ngvarg
+         ytmp = y
          ytmp(1, i) = ytmp(1, i) - dy
-         call network_forward(nnet, ytmp, ztmp, nstrans=.false., &
-                              norm=nnet%norm, calc_mom=.false.)
-         call transform_to_refcdf(ztmp(1), zref, nsref, ztmp(1))
-         dn(i) = z - ztmp(1)
+         dn(i) = z - f(ytmp)
+         if (dn(i) .lt. 0.d0) inv(i) = .true.
       end do
-
-      if (dn(i) .lt. 0.d0) inv = .true.
-
-      ! revert back to original y vector
-      ytmp = y
-      ytmp = reshape(ytmp, shape=[1, ngvarg])
 
       ! positive step
       do i = 1, ngvarg
+         ytmp = y
          ytmp(1, i) = ytmp(1, i) + dy
-         call network_forward(nnet, ytmp, ztmp, nstrans=.false., &
-                              norm=nnet%norm, calc_mom=.false.)
-         call transform_to_refcdf(ztmp(1), zref, nsref, ztmp(1))
-         dp(i) = z - ztmp(1)
+         dp(i) = z - f(ytmp)
       end do
+
+      ! ! calc metrics of "difficulty"
+      ! b = dz
+      ! if (dz .lt. 0.d0) c = min(minval(dp), minval(dn))
+      ! if (dz .gt. 0.d0) c = max(maxval(dp), maxval(dn))
+      ! a = b - c
+
+      b = dz
+      if (dz .lt. 0.d0) c = minval(dn) ! should only consider positive values
+      if (dz .gt. 0.d0) c = maxval(dp) ! should only consider negative values
+      a = b - c
 
       ! sort indices by delta
       d = abs(dp - dn)
       call sortem(1, ngvarg, d, 3, fidx, dp, dn, d, d, d, d, d)
       didx = fidx
 
-      ! calc metrics of "difficulty"
-      ! a is negative if it falls within the sensitivity
-      ! of a factor
-      b = dz
-      if (dz .lt. 0.d0) c = minval(dn)
-      if (dz .gt. 0.d0) c = maxval(dp)
-      a = b - c
-
    end subroutine latent_sensitivity
+
+   subroutine binary_search(z, y, dy, as, idx, tol, zhat, delta)
+
+      !
+      ! search for the value of y(idx) such that f(y) matches z;
+      ! the correct value lies within y(idx) +/- dy
+      ! https://codereview.stackexchange.com/questions/168730/binary-search-on-real-space
+      !
+
+      ! parameters
+      real(8), intent(in) :: z, dy, tol
+      integer, intent(in) :: as, idx
+      real(8), intent(inout) :: y(:, :)
+      real(8), intent(out) :: zhat, delta
+
+      ! locals
+      real(8) :: ytmp(size(y, dim=1), size(y, dim=2))
+      real(8) :: k, m, n
+      integer :: i
+
+      ! set search boundaries
+      if (as .eq. 0) then ! reduce y
+         m = y(1, idx) - dy
+         n = y(1, idx)
+      else ! increase y
+         m = y(1, idx)
+         n = y(1, idx) + dy
+      end if
+
+      ! check lower bound
+      ytmp = y
+      ytmp(1, idx) = m
+      delta = z - f(ytmp)
+      if (abs(delta) .le. tol) then
+         y(1, idx) = m
+         zhat = f(ytmp)
+         delta = abs(delta)
+         return
+      end if
+
+      ! check upper bound
+      ytmp = y
+      ytmp(1, idx) = n
+      delta = z - f(ytmp)
+      if (abs(delta) .le. tol) then
+         y(1, idx) = n
+         zhat = f(ytmp)
+         delta = abs(delta)
+         return
+      end if
+
+      ! binary search
+      ytmp = y
+      do while (m < n)
+         i = i + 1
+         k = (n + m)/2
+         ytmp(1, idx) = k
+         delta = z - f(ytmp)
+         if (abs(delta) .le. tol) then
+            y(1, idx) = k
+            zhat = f(ytmp)
+            delta = abs(delta)
+            return
+         end if
+         if (delta .gt. 0) then
+            if (as .eq. 0) n = k
+            if (as .eq. 1) m = k
+         else if (delta .lt. 0) then
+            if (as .eq. 0) n = k
+            if (as .eq. 1) m = k
+         end if
+         if (i .gt. 1000) then
+            write (*, *) "infinte loop in binary search"
+            return
+         end if
+      end do
+
+   end subroutine binary_search
 
    subroutine build_refcdf(nsamp, zref, nsref, yref, usnsref)
 
@@ -816,6 +847,91 @@ contains
 
    end subroutine lookup_table
 
+   subroutine findidx(dp, dn, dz, updn, idx, as)
+
+      real(8), intent(in) :: dp(:), dn(:), dz
+      integer, intent(in) :: updn
+      integer, intent(out) :: idx, as
+
+      ! locals
+      integer :: i, j, k
+      logical :: jj(size(dp)), kk(size(dp))
+
+      jj = .false.
+      kk = .false.
+      as = 0 ! +/- dy?
+
+      if (updn .eq. 0) then
+         ! if we are decreasing z the two scenarios are:
+         ! 1. dp is pos and inv is true
+         ! 2. dn is pos and inv is false
+
+         do i = 1, size(dp)
+            if (dp(i) .gt. 0.d0) then
+               if (dp(i) .gt. abs(dz)) then
+                  jj(i) = .true.
+               end if
+            end if
+            if (dn(i) .gt. 0.d0) then
+               if (dn(i) .gt. abs(dz)) then
+                  kk(i) = .true.
+               end if
+            end if
+         end do
+
+         ! minimum index of values greater than dz
+         j = minloc(dp, dim=1, mask=jj)
+         k = minloc(dn, dim=1, mask=kk)
+
+      else if (updn .eq. 1) then
+         ! if we are increasing z the two scenarios are:
+         ! 1. dp is neg and inv is false
+         ! 2. dn is neg and inv is true
+
+         do i = 1, size(dp)
+            if (dp(i) .lt. 0.d0) then
+               if (abs(dp(i)) .gt. dz) then
+                  jj(i) = .true.
+               end if
+            end if
+            if (dn(i) .lt. 0.d0) then
+               if (abs(dn(i)) .gt. dz) then
+                  kk(i) = .true.
+               end if
+            end if
+         end do
+
+         ! minimum index of values greater than dz
+         j = maxloc(dp, dim=1, mask=jj)
+         k = maxloc(dn, dim=1, mask=kk)
+      end if
+
+      ! these should never both be zero as a condition of
+      ! entring this subroutine is at least one factor is
+      ! sensitive enough
+      if (j .eq. 0 .and. k .eq. 0) then
+         stop "STOP! something is funky"
+      end if
+
+      ! kk is all false
+      if (any(jj) .and. .not. any(kk)) then
+         idx = j
+         as = 1
+         ! jj is all false
+      else if (any(kk) .and. .not. any(jj)) then
+         idx = k
+         as = 0
+      else
+         idx = min(j, k)
+         if (j .lt. k) then
+            as = 1 ! add dy
+         else
+            as = 0 ! subtract dy
+         end if
+      end if
+
+   end subroutine findidx
+
    function findloc(arr, x, ltgt) result(idx)
 
       ! find the first occurence where the
@@ -826,22 +942,104 @@ contains
       integer :: j, idx
 
       select case (ltgt)
-      case (0)
+      case (0) ! find index where arr(j) < x
          do j = 1, size(arr)
             if (arr(j) .lt. x) then
                idx = j
-               exit
+               return
             end if
          end do
-      case (1)
+         idx = size(arr, dim=1) ! default is max
+      case (1) ! find index where arr(j) > x
          do j = 1, size(arr)
             if (arr(j) .gt. x) then
                idx = j
-               exit
+               return
             end if
          end do
+         idx = size(arr, dim=1) ! default is max
       end select
 
    end function findloc
+
+   function set_to_bound(dy, dp, dn, y, fidx, updn) result(z)
+
+      ! adjust the most sensitive factor to its sensitivity bound
+
+      real(8) :: dy, dp(:), dn(:), y(:, :)
+      integer :: fidx(:)
+      integer :: updn ! increase (1) or decrease (0) z
+      real(8) :: z
+      integer :: i, j
+      logical :: ii(size(dp)), jj(size(dp))
+
+      ii = .false.
+      jj = .false.
+
+      if (updn .eq. 0) then
+         ! if we are decreasing z the two scenarios are:
+         ! 1. dp is pos and inv is true
+         ! 2. dn is pos and inv is false
+
+         where (dp .gt. 0.d0) ii = .true.
+         where (dn .gt. 0.d0) jj = .true.
+
+         i = maxloc(dp, dim=1, mask=ii)
+         j = maxloc(dn, dim=1, mask=jj)
+
+         if (dp(i) .gt. dn(j)) then
+            y(1, fidx(i)) = y(1, fidx(i)) + dy
+         else
+            y(1, fidx(j)) = y(1, fidx(j)) - dy
+         end if
+
+      else if (updn .eq. 1) then
+         ! if we are increasing z the two scenarios are:
+         ! 1. dp is neg and inv is false
+         ! 2. dn is neg and inv is true
+
+         where (dp .lt. 0.d0) ii = .true.
+         where (dn .lt. 0.d0) jj = .true.
+
+         i = minloc(dp, dim=1, mask=ii)
+         j = minloc(dn, dim=1, mask=jj)
+
+         if (dp(i) .lt. dn(j)) then
+            y(1, fidx(i)) = y(1, fidx(i)) + dy
+         else
+            y(1, fidx(j)) = y(1, fidx(j)) - dy
+         end if
+
+      end if
+
+      ! calculate the new imputed value
+      z = f(y)
+
+   end function set_to_bound
+
+   function f(y) result(z)
+
+      ! convenience nmr function - latent to observed mapping
+
+      real(8), intent(in) :: y(:, :)
+      real(8) :: zz(1), z
+
+      call network_forward(nnet, y, zz, .false., nnet%norm, .false.)
+      call transform_to_refcdf(zz(1), zref, nsref, zz(1))
+      z = zz(1)
+
+   end function f
+
+   function nmr(y) result(a)
+
+      ! conveience function for activation values
+
+      real(8), intent(in) :: y(:, :)
+      real(8) :: aa(1), a
+
+      call network_forward(nnet, y, aa, .false., nnet%norm, .false.)
+      a = aa(1)
+
+   end function nmr
 
 end module impute_mod
