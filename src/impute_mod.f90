@@ -49,11 +49,11 @@ contains
          call nmr_imputer(pool, ireal, nsearch, imputed, iter1, iter2, &
                           tol1, tol2, nresim, rsidx)
 
-         ! do we need to resim any locations? nresim is updated by call to imputer
+         ! do we need to resim any locations?
+         ! nresim is updated by call to imputer
          do while (nresim .gt. 0)
 
             j = j + 1
-            if (j .gt. int(ndata*150)) exit
 
             write (*, *) "resimulating at", nresim, "locations"
 
@@ -64,6 +64,8 @@ contains
             ! call the imputer again
             call nmr_imputer(pool, ireal, nsearch, imputed, iter1, iter2, &
                              tol1, tol2, nresim, rsidx, idxs)
+
+            if (j .gt. 10) exit
 
          end do
 
@@ -224,7 +226,7 @@ contains
       if (nresim .gt. 0) iresim = .true.
 
       ! all location are initially unsimulated
-      if (.not. iresim) isim = 0 ! only reset if not resimulating
+      if (.not. iresim) isim = 0 ! dont reset if resimulating
       useidx = 0
       nuse = 0
       nlook = 0
@@ -362,15 +364,6 @@ contains
 
             ! calculate observed value - activation units
             yimp1 = reshape(sim(simidx, :), shape=[1, nfact]) ! reshape to preserve first dim
-            ! call network_forward(nnet, yimp1, zimp1, nstrans=.false., &
-            !                      norm=nnet%norm, calc_mom=.false.)
-            ! zinit(simidx, ireal) = zimp1(1)
-
-            ! ! calculate observed value - nscore units
-            ! call transform_to_refcdf(zimp1(1), zref, nsref, zimp1(1))
-
-            ! get difference with true data value
-            ! diff1 = abs(zimp1(1) - var(simidx))
             zimp1 = f(yimp1)
             diff1 = abs(zimp1 - var(simidx))
 
@@ -409,8 +402,8 @@ contains
             ! track data indices so we can revisit them
             que((nr - 1)*nreset + 1:nr*nreset) = reset_idx
 
-            ! ! cycle to start a new iteration of DATALOOP
-            ! cycle
+            ! cycle to start a new iteration of DATALOOP
+            cycle
 
          end if
 
@@ -443,19 +436,21 @@ contains
 
                ! are we inside the sensitivity tolerances for negative dz?
                ! if so we can simply find a solution
-               if (a .gt. 0.d0) then
+               ! if (a .gt. 0.d0) then
+               if (a .lt. 0.d0) then
 
                   ! find the factor with the smallest delta that
                   ! is bigger than dz
                   ! idx = findloc(abs(dp), abs(dz), 1)
-                  call findidx(dp, dn, dz, 0, idx, as)
+                  call findidx(dp, dn, dz, 0, idx)
 
                   ! do some binary search based on dp(idx)
                   ! this updates diff2 which should break do while condition
-                  call binary_search(var(simidx), yimp2, dy, as, didx(idx), tol2, &
-                                     zimp2, diff2)
+                  call binary_search(var(simidx), yimp2, dy, dz, inv(didx(idx)), &
+                                     didx(idx), tol2, zimp2, diff2)
 
-               else if (a .lt. 0.d0) then
+                  ! else if (a .lt. 0.d0) then
+               else if (a .gt. 0.d0) then
                   ! if we are outside the senesitvity tolerances for negative
                   ! dz, we need to perturb and reasses the sensitivities
 
@@ -479,12 +474,12 @@ contains
                   ! find the factor with the smallest delta that
                   ! is bigger than dz
                   ! idx = findloc(abs(dp), abs(dz), 1)
-                  call findidx(dp, dn, dz, 1, idx, as)
+                  call findidx(dp, dn, dz, 1, idx)
 
                   ! do some binary search based on dp(idx)
                   ! this updates diff2 which should break do while condition
-                  call binary_search(var(simidx), yimp2, dy, as, didx(idx), tol2, &
-                                     zimp2, diff2)
+                  call binary_search(var(simidx), yimp2, dy, dz, inv(didx(idx)), &
+                                     didx(idx), tol2, zimp2, diff2)
 
                else if (a .gt. 0.d0) then
                   ! if we are outside the senesitvity tolerances for
@@ -620,7 +615,7 @@ contains
       real(8), intent(in) :: z ! current imputed value
       real(8), intent(in) :: y(:, :) ! latent vector
       real(8), intent(in) :: dz ! current delta with observed
-      real(8), intent(out) :: dp(:), dn(:)
+      real(8), intent(inout) :: dp(:), dn(:)
       integer, intent(out) :: didx(:) ! sorted delta z
       real(8), intent(out) :: a ! measure of in/out tols
       real(8), intent(out) :: dy ! delta y
@@ -642,12 +637,13 @@ contains
       call gauinv(0.525d0, y2, ierr)
       dy = y2 - y1
 
-      ! if inv is false postive perts increase z, negative
-      ! decrease z. if true sign of pert and the direction
+      ! If inv is false postive perts increase z, negative
+      ! decrease z. If true, sign of pert and the direction
       ! z moves are inverse
       inv = .false.
 
       ! negative step
+      dn = 0.d0
       do i = 1, ngvarg
          ytmp = y
          ytmp(1, i) = ytmp(1, i) - dy
@@ -656,22 +652,20 @@ contains
       end do
 
       ! positive step
+      dp = 0.d0
       do i = 1, ngvarg
          ytmp = y
          ytmp(1, i) = ytmp(1, i) + dy
          dp(i) = z - f(ytmp)
       end do
 
-      ! ! calc metrics of "difficulty"
-      ! b = dz
-      ! if (dz .lt. 0.d0) c = min(minval(dp), minval(dn))
-      ! if (dz .gt. 0.d0) c = max(maxval(dp), maxval(dn))
-      ! a = b - c
-
-      b = dz
-      if (dz .lt. 0.d0) c = minval(dn) ! should only consider positive values
-      if (dz .gt. 0.d0) c = maxval(dp) ! should only consider negative values
-      a = b - c
+      ! calc metrics of "difficulty"
+      if (dz .lt. 0.d0) c = max(maxval(dp), maxval(dn))
+      if (dz .gt. 0.d0) c = min(minval(dp), minval(dn))
+      ! these absolute values make a < 0 inside regardless of the
+      ! sign of dz
+      b = abs(dz)
+      a = b - abs(c)
 
       ! sort indices by delta
       d = abs(dp - dn)
@@ -680,7 +674,7 @@ contains
 
    end subroutine latent_sensitivity
 
-   subroutine binary_search(z, y, dy, as, idx, tol, zhat, delta)
+   subroutine binary_search(z, y, dy, dz, inv, idx, tol, zhat, delta)
 
       !
       ! search for the value of y(idx) such that f(y) matches z;
@@ -689,8 +683,9 @@ contains
       !
 
       ! parameters
-      real(8), intent(in) :: z, dy, tol
-      integer, intent(in) :: as, idx
+      real(8), intent(in) :: z, dy, dz, tol
+      integer, intent(in) :: idx
+      logical, intent(in) :: inv
       real(8), intent(inout) :: y(:, :)
       real(8), intent(out) :: zhat, delta
 
@@ -700,13 +695,8 @@ contains
       integer :: i
 
       ! set search boundaries
-      if (as .eq. 0) then ! reduce y
-         m = y(1, idx) - dy
-         n = y(1, idx)
-      else ! increase y
-         m = y(1, idx)
-         n = y(1, idx) + dy
-      end if
+      m = y(1, idx) - dy
+      n = y(1, idx) + dy
 
       ! check lower bound
       ytmp = y
@@ -741,15 +731,18 @@ contains
             y(1, idx) = k
             zhat = f(ytmp)
             delta = abs(delta)
+            ! write (*, *) "binary search sucessful"
             return
          end if
+
          if (delta .gt. 0) then
-            if (as .eq. 0) n = k
-            if (as .eq. 1) m = k
+            if (inv) n = k ! decrease upper bound
+            if (.not. inv) m = k ! increase lower bound
          else if (delta .lt. 0) then
-            if (as .eq. 0) n = k
-            if (as .eq. 1) m = k
+            if (inv) m = k ! increase lower bound
+            if (.not. inv) n = k ! decrease upper bound
          end if
+
          if (i .gt. 1000) then
             write (*, *) "infinte loop in binary search"
             return
@@ -847,11 +840,11 @@ contains
 
    end subroutine lookup_table
 
-   subroutine findidx(dp, dn, dz, updn, idx, as)
+   subroutine findidx(dp, dn, dz, updn, idx)
 
       real(8), intent(in) :: dp(:), dn(:), dz
       integer, intent(in) :: updn
-      integer, intent(out) :: idx, as
+      integer, intent(out) :: idx
 
       ! locals
       integer :: i, j, k
@@ -859,7 +852,6 @@ contains
 
       jj = .false.
       kk = .false.
-      as = 0 ! +/- dy?
 
       if (updn .eq. 0) then
          ! if we are decreasing z the two scenarios are:
@@ -916,18 +908,11 @@ contains
       ! kk is all false
       if (any(jj) .and. .not. any(kk)) then
          idx = j
-         as = 1
          ! jj is all false
       else if (any(kk) .and. .not. any(jj)) then
          idx = k
-         as = 0
       else
          idx = min(j, k)
-         if (j .lt. k) then
-            as = 1 ! add dy
-         else
-            as = 0 ! subtract dy
-         end if
       end if
 
    end subroutine findidx
@@ -984,6 +969,10 @@ contains
          where (dp .gt. 0.d0) ii = .true.
          where (dn .gt. 0.d0) jj = .true.
 
+         ! edge case where both masks are false?
+         if (.not. any(ii) .and. .not. any(jj)) then
+         end if
+
          i = maxloc(dp, dim=1, mask=ii)
          j = maxloc(dn, dim=1, mask=jj)
 
@@ -1000,6 +989,10 @@ contains
 
          where (dp .lt. 0.d0) ii = .true.
          where (dn .lt. 0.d0) jj = .true.
+
+         ! edge case where both masks are false?
+         if (.not. any(ii) .and. .not. any(jj)) then
+         end if
 
          i = minloc(dp, dim=1, mask=ii)
          j = minloc(dn, dim=1, mask=jj)
