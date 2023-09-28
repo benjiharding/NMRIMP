@@ -446,7 +446,7 @@ contains
 
                   ! do some binary search based on dp(idx)
                   ! this updates diff2 which should break do while condition
-                  call binary_search(var(simidx), yimp2, dy, dz, inv(didx(idx)), &
+                  call binary_search(var(simidx), yimp2, dy, inv(didx(idx)), &
                                      didx(idx), tol2, zimp2, diff2)
 
                   ! else if (a .lt. 0.d0) then
@@ -478,7 +478,7 @@ contains
 
                   ! do some binary search based on dp(idx)
                   ! this updates diff2 which should break do while condition
-                  call binary_search(var(simidx), yimp2, dy, dz, inv(didx(idx)), &
+                  call binary_search(var(simidx), yimp2, dy, inv(didx(idx)), &
                                      didx(idx), tol2, zimp2, diff2)
 
                else if (a .gt. 0.d0) then
@@ -674,7 +674,7 @@ contains
 
    end subroutine latent_sensitivity
 
-   subroutine binary_search(z, y, dy, dz, inv, idx, tol, zhat, delta)
+   subroutine binary_search(z, y, dy, inv, idx, tol, zhat, delta)
 
       !
       ! search for the value of y(idx) such that f(y) matches z;
@@ -683,7 +683,7 @@ contains
       !
 
       ! parameters
-      real(8), intent(in) :: z, dy, dz, tol
+      real(8), intent(in) :: z, dy, tol
       integer, intent(in) :: idx
       logical, intent(in) :: inv
       real(8), intent(inout) :: y(:, :)
