@@ -932,6 +932,32 @@ contains
 
    end subroutine gauinv
 
+   function gcum(x) result(ppf)
+      !-----------------------------------------------------------------------
+      !
+      ! Evaluate the standard normal cdf given a normal deviate x.  gcum is
+      ! the area under a unit normal curve to the left of x.  The results are
+      ! accurate only to about 5 decimal places.
+      !
+      !
+      !-----------------------------------------------------------------------
+      real(8) :: x, z, t, e2, ppf
+      z = x
+      if (z .lt. 0.D0) z = -z
+      t = 1.D0/(1.D0 + 0.2316419D0*z)
+      ppf = t*(0.31938153D0 + &
+               t*(-0.356563782D0 + t*(1.781477937D0 + &
+                                      t*(-1.821255978D0 + t*1.330274429D0))))
+      e2 = 0.D0
+      !
+      !  6 standard deviations out gets treated as infinity:
+      !
+      if (z .le. 6.D0) e2 = exp(-z*z/2.D0)*0.3989422803D0
+      ppf = 1.D0 - e2*ppf
+      if (x .ge. 0.) return
+      ppf = 1.D0 - ppf
+   end
+
    subroutine random_stduniform(u)
       real(8), intent(out) :: u
       real(8) :: r
