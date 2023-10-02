@@ -8,7 +8,7 @@ module impute_mod
    use vario_mod, only: set_sill, set_rotmatrix, gammabar
    use covasubs, only: get_cov
    use constants, only: MINCOV, IMPEPS, EPSLON, SMALLDBLE
-   use subs, only: shuffle, gauinv, sortem, nscore, &
+   use subs, only: shuffle, gauinv, gcum, sortem, nscore, &
                    locate, powint, dblecumsum
 
    implicit none
@@ -23,7 +23,7 @@ contains
       !
 
       real(8) :: start, finish
-      integer :: ireal, nresim, j
+      integer :: ireal, nresim, i, j, luidx, nlook
       integer, allocatable :: rsidx(:), idxs(:) ! resim indices
 
       call cpu_time(start)
@@ -55,7 +55,7 @@ contains
 
             j = j + 1
 
-            write (*, *) "resimulating at", nresim, "locations"
+            if (idbg .gt. 1) write (*, *) "resimulating at", nresim, "locations"
 
             ! reset the sim indicators for these locations
             idxs = rsidx
@@ -65,9 +65,31 @@ contains
             call nmr_imputer(pool, ireal, nsearch, imputed, iter1, iter2, &
                              tol1, tol2, nresim, rsidx, idxs)
 
-            if (j .gt. 10) exit
+            if (j .gt. 50) exit
 
          end do
+
+         ! use lookup table here?
+         nlook = 0
+         if (any(isim(:, 1) .lt. 1)) then
+            do i = 1, ndata
+               if (isim(i, 1) .lt. 1) then
+                  call lookup_table(var(i), usnsref, yref, &
+                                    imputed(i, nfact + 1, ireal), &
+                                    imputed(i, 1:nfact, ireal), luidx)
+                  zinit(i, ireal) = zref(luidx)
+                  nlook = nlook + 1
+               end if
+            end do
+         end if
+
+         if (idbg .gt. 1) then
+            if (nlook .gt. 0) write (*, *) nlook, "values taken from lookup table"
+         end if
+
+         if (nlook .gt. int(ndata*0.05)) then
+            write (*, *) "Warning: more than 5% of values taken from lookup table"
+         end if
 
       end do REALLOOP
 
@@ -159,7 +181,7 @@ contains
          gbar(igv) = gb
       end do
 
-      ! this sort is ascending - most continuous is last
+      ! this sort is ascending - most continuous is first
       call sortem(1, ngvarg, gbar, 1, gbaridx, gbar, gbar, gbar, &
                   gbar, gbar, gbar, gbar)
 
@@ -197,10 +219,11 @@ contains
       integer, allocatable :: didx(:)
       real(8) :: dy, dz, a
       integer :: as
-      logical :: inv(ngvarg)
+      logical :: inv(ngvarg + 1)
 
       ! resimulation
-      integer, parameter :: nreset = 6 ! simidx + 5 neighbours
+      ! integer, parameter :: nreset = 6 ! simidx + 5 neighbours
+      integer, parameter :: nreset = 11 ! simidx + 10 neighbours
       integer :: nr ! number of resims
       integer :: reset_idx(nreset)
       integer :: que(ndata*nreset) ! max possible size
@@ -213,7 +236,7 @@ contains
       ! indexes
       integer :: i, j, k1, k2, igv, iy, fi, luidx, idx
 
-      allocate (dp(ngvarg), dn(ngvarg), didx(ngvarg))
+      allocate (dp(ngvarg + 1), dn(ngvarg + 1), didx(ngvarg + 1))
 
       !
       ! define random path through nodes
@@ -250,6 +273,8 @@ contains
          !
          ! loop over factors at this simidx
          !
+         cmeans = 0.d0
+         cstdevs = 1.d0
          FACTLOOP: do igv = 1, ngvarg
 
             ! anisotropic coord for this simidx
@@ -299,8 +324,9 @@ contains
             ! min stdev to prevent getting stuck?
             if (cstdevs(igv) .lt. 0.1) cstdevs(igv) = 0.1
 
-            ! update this location and factor as simulated
-            isim(simidx, igv) = 1
+            ! crazy means?
+            if (cmeans(igv) .lt. gmin) cmeans(igv) = gmin
+            if (cmeans(igv) .gt. gmax) cmeans(igv) = gmax
 
          end do FACTLOOP
 
@@ -362,28 +388,38 @@ contains
 
             end do
 
-            ! calculate observed value - activation units
+            ! calculate observed value for this y vector
             yimp1 = reshape(sim(simidx, :), shape=[1, nfact]) ! reshape to preserve first dim
             zimp1 = f(yimp1)
             diff1 = abs(zimp1 - var(simidx))
 
+            ! check for funky behaviour that will cause stress
+            ! in the polishing step
+
             ! break if we need to
             if (k1 .ge. iter1) then
-               write (*, *) "coarse search did not converge after", iter1, &
-                  "iterations at data index", simidx, "diff=", diff1
+               if (idbg .gt. 1) then
+                  write (*, *) "coarse search did not converge after", iter1, &
+                     "iterations at data index", simidx, "diff=", diff1
 
-               ! do j = 1, nfact
-               !    write (*, *) cmeans(j), cstdevs(j)
-               ! end do
+                  ! do j = 1, nfact
+                  !    write (*, *) cmeans(j), cstdevs(j)
+                  ! end do
 
-               ! write (*, *) " "
-               ! write (*, *) yimp1
-               ! write (*, *) " "
-
+                  ! write (*, *) " "
+                  ! write (*, *) yimp1
+                  ! write (*, *) " "
+               end if
                exit
             end if
 
          end do COARSE
+
+         ! update conditioning array with intial coarse values
+         zinit(simidx, ireal) = nmr(yimp1)
+         sim(simidx, :) = yimp1(1, :)
+         ! imputed(simidx, 1:nfact, ireal) = yimp1(1, :)
+         ! imputed(simidx, nfact + 1, ireal) = zimp1
 
          !
          ! if the coarse search doesn't converge track the locations
@@ -402,7 +438,9 @@ contains
             ! track data indices so we can revisit them
             que((nr - 1)*nreset + 1:nr*nreset) = reset_idx
 
-            ! cycle to start a new iteration of DATALOOP
+            ! cycle to start a new iteration of DATALOOP unless
+            ! we are resimulating
+            ! if (.not. present(idxs)) cycle
             cycle
 
          end if
@@ -429,7 +467,8 @@ contains
 
             ! get the direction we need to move and factor sensitivities
             dz = var(simidx) - zimp2
-            call latent_sensitivity(zimp2, yimp2, dz, dp, dn, didx, a, dy, inv)
+            call latent_sensitivity(zimp2, yimp2, dz, dp, dn, &
+                                    didx, a, dy, inv)
 
             ! zimp is too high, we need to reduce
             if (dz .lt. 0.d0) then
@@ -441,7 +480,6 @@ contains
 
                   ! find the factor with the smallest delta that
                   ! is bigger than dz
-                  ! idx = findloc(abs(dp), abs(dz), 1)
                   call findidx(dp, dn, dz, 0, idx)
 
                   ! do some binary search based on dp(idx)
@@ -458,7 +496,7 @@ contains
                   zimp2 = set_to_bound(dy, dp, dn, yimp2, didx, 0)
 
                   ! perhaps we need to iterate over a few factors sorted
-                  ! by gammebar here
+                  ! by gammabar here
 
                   ! check the new difference
                   diff2 = abs(zimp2 - var(simidx))
@@ -473,7 +511,6 @@ contains
 
                   ! find the factor with the smallest delta that
                   ! is bigger than dz
-                  ! idx = findloc(abs(dp), abs(dz), 1)
                   call findidx(dp, dn, dz, 1, idx)
 
                   ! do some binary search based on dp(idx)
@@ -489,7 +526,7 @@ contains
                   zimp2 = set_to_bound(dy, dp, dn, yimp2, didx, 1)
 
                   ! perhaps we need to iterate over a few factors sorted
-                  ! by gammebar here
+                  ! by gammabar here
 
                   ! check the new difference
                   diff2 = abs(zimp2 - var(simidx))
@@ -540,6 +577,11 @@ contains
          !
          imputed(simidx, 1:nfact, ireal) = yimp2(1, :)
          imputed(simidx, nfact + 1, ireal) = zimp2
+
+         ! update this location and factor as simulated
+         do igv = 1, ngvarg
+            isim(simidx, igv) = 1
+         end do
 
       end do DATALOOP
 
@@ -622,15 +664,16 @@ contains
       logical, intent(out) :: inv(:) ! perturbations inverse to sign?
 
       ! locals
-      real(8) :: d(ngvarg)
+      real(8) :: d(ngvarg + 1)
       real(8) :: ytmp(size(y, dim=1), size(y, dim=2))
-      real(8) :: y1, y2
+      real(8) :: yy(size(y, dim=1), size(y, dim=2))
+      real(8) :: y1, y2, p, xp, zz
       real(8) :: b, c
-      real(8) :: fidx(ngvarg)
-      integer :: i, ierr
+      real(8) :: fidx(ngvarg + 1)
+      integer :: i, igv, ierr
 
       ! factor indices
-      fidx = [(i, i=1, ngvarg)]
+      fidx = [(i, i=1, ngvarg + 1)]
 
       ! maximum step size in probability space
       call gauinv(0.5d000, y1, ierr)
@@ -642,22 +685,46 @@ contains
       ! z moves are inverse
       inv = .false.
 
-      ! negative step
+      ! calculate +/- sensitivity
       dn = 0.d0
-      do i = 1, ngvarg
+      dp = 0.d0
+      do i = 1, ngvarg + 1
          ytmp = y
          ytmp(1, i) = ytmp(1, i) - dy
          dn(i) = z - f(ytmp)
+         ytmp(1, i) = ytmp(1, i) + dy*2.d0 ! revert back to zero plus dy
+         dp(i) = z - f(ytmp)
          if (dn(i) .lt. 0.d0) inv(i) = .true.
       end do
 
-      ! positive step
-      dp = 0.d0
-      do i = 1, ngvarg
-         ytmp = y
-         ytmp(1, i) = ytmp(1, i) + dy
-         dp(i) = z - f(ytmp)
-      end do
+      ! catch edge cases where dp/dn are all the same sign
+      ! use a larger/smaller perturbation?
+      if (dz .lt. 0) then
+         if (all(dp < 0) .and. all(dn < 0)) then ! all neg
+            dp = 0.d0
+            dn = 0.d0
+            do i = 1, ngvarg + 1
+               ytmp = y
+               ytmp(1, i) = ytmp(1, i) + dy
+               dp(i) = z - f(ytmp)
+               ytmp(1, i) = ytmp(1, i) - dy*2.d0 ! reset
+               dn(i) = z - f(ytmp)
+            end do
+         end if
+      else if (dz .gt. 0) then
+         if (all(dp > 0) .and. all(dn > 0)) then ! all pos
+            dp = 0.d0
+            dn = 0.d0
+            do i = 1, ngvarg + 1
+               ytmp = y
+               ytmp(1, i) = ytmp(1, i) - dy
+               dn(i) = z - f(ytmp)
+               if (dn(i) .lt. 0.d0) inv(i) = .true.
+               ytmp(1, i) = ytmp(1, i) + dy*2.d0 ! reset
+               dp(i) = z - f(ytmp)
+            end do
+         end if
+      end if
 
       ! calc metrics of "difficulty"
       if (dz .lt. 0.d0) c = max(maxval(dp), maxval(dn))
@@ -720,7 +787,7 @@ contains
          return
       end if
 
-      ! binary search
+      ! binary search within [m, n]
       ytmp = y
       do while (m < n)
          i = i + 1
@@ -731,10 +798,8 @@ contains
             y(1, idx) = k
             zhat = f(ytmp)
             delta = abs(delta)
-            ! write (*, *) "binary search sucessful"
             return
          end if
-
          if (delta .gt. 0) then
             if (inv) n = k ! decrease upper bound
             if (.not. inv) m = k ! increase lower bound
@@ -825,8 +890,8 @@ contains
       real(8), intent(in) :: z ! target data value
       real(8), intent(in) :: zref(:) ! unsorted reference z values
       real(8), intent(in) :: yref(:, :) ! unsorted Gauss factors corresponding to zref
-      real(8), intent(out) :: zimp(:) ! new imputed value from lookup table
-      real(8), intent(out) :: yimp(:, :) ! Gauss factors corresponding to zimp
+      real(8), intent(out) :: zimp ! new imputed value from lookup table
+      real(8), intent(out) :: yimp(:) ! Gauss factors corresponding to zimp
       real(8) :: diff(size(zref))
       integer, intent(out) :: idx
 
@@ -836,7 +901,7 @@ contains
 
       ! grab the values from that index
       zimp = zref(idx)
-      yimp(1, :) = yref(idx, :)
+      yimp = yref(idx, :)
 
    end subroutine lookup_table
 
@@ -971,10 +1036,13 @@ contains
 
          ! edge case where both masks are false?
          if (.not. any(ii) .and. .not. any(jj)) then
+            i = 1
+            j = 1
+            write (*, *) "both masks are false"
+         else
+            i = maxloc(dp, dim=1, mask=ii)
+            j = maxloc(dn, dim=1, mask=jj)
          end if
-
-         i = maxloc(dp, dim=1, mask=ii)
-         j = maxloc(dn, dim=1, mask=jj)
 
          if (dp(i) .gt. dn(j)) then
             y(1, fidx(i)) = y(1, fidx(i)) + dy
@@ -992,10 +1060,13 @@ contains
 
          ! edge case where both masks are false?
          if (.not. any(ii) .and. .not. any(jj)) then
+            i = 1
+            j = 1
+            write (*, *) "both masks are false"
+         else
+            i = minloc(dp, dim=1, mask=ii)
+            j = minloc(dn, dim=1, mask=jj)
          end if
-
-         i = minloc(dp, dim=1, mask=ii)
-         j = minloc(dn, dim=1, mask=jj)
 
          if (dp(i) .lt. dn(j)) then
             y(1, fidx(i)) = y(1, fidx(i)) + dy
