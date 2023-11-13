@@ -11,6 +11,7 @@ module geostat
    ! flags
    integer :: itrans
    integer :: idbg
+   integer :: isort = 0 ! sort factors by gammabar?
 
    ! network variables
    type(network) :: nnet
@@ -55,6 +56,7 @@ module geostat
    ! gammabar for sorting by continuity
    real(8) :: gb
    real(8), allocatable :: gbar(:), gbaridx(:)
+   integer :: nsort
 
    ! data variables
    real(8), allocatable :: var(:)

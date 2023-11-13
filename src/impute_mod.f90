@@ -9,7 +9,7 @@ module impute_mod
    use covasubs, only: get_cov
    use constants, only: MINCOV, IMPEPS, EPSLON, SMALLDBLE
    use subs, only: shuffle, gauinv, gcum, sortem, nscore, &
-                   locate, powint, dblecumsum
+                   locate, powint, dblecumsum, reverse
 
    implicit none
 
@@ -181,9 +181,16 @@ contains
          gbar(igv) = gb
       end do
 
-      ! this sort is ascending - most continuous is first
+      ! this sort is ascending
       call sortem(1, ngvarg, gbar, 1, gbaridx, gbar, gbar, gbar, &
                   gbar, gbar, gbar, gbar)
+
+      ! reverse it so most continuous (smallest gbar) is last
+      call reverse(gbar)
+      call reverse(gbaridx)
+
+      ! number of factors to consider for gbar sorting
+      nsort = ceiling(ngvarg * 1./3.)
 
    end subroutine init_imputer
 
@@ -492,11 +499,14 @@ contains
                   ! if we are outside the senesitvity tolerances for negative
                   ! dz, we need to perturb and reasses the sensitivities
 
-                  ! set the most sensitive factor to bound and update z;
-                  zimp2 = set_to_bound(dy, dp, dn, yimp2, didx, 0)
-
-                  ! perhaps we need to iterate over a few factors sorted
-                  ! by gammabar here
+                  ! sort by gamma bar?
+                  if (isort .gt. 0) then
+                     do j = 1, nsort
+                        call set_to_bound(dy, dp, dn, yimp2, int(gbaridx(j)), 0, zimp2)
+                     end do
+                  else ! set the most sensitive factor to bound and update z;
+                     zimp2 = dynamic_set_to_bound(dy, dp, dn, yimp2, didx, 0)
+                  end if
 
                   ! check the new difference
                   diff2 = abs(zimp2 - var(simidx))
@@ -522,11 +532,14 @@ contains
                   ! if we are outside the senesitvity tolerances for
                   ! positive dz, we need to perturb and reasses the sensitivities
 
-                  ! set the most sensitive factor to bound and update z;
-                  zimp2 = set_to_bound(dy, dp, dn, yimp2, didx, 1)
-
-                  ! perhaps we need to iterate over a few factors sorted
-                  ! by gammabar here
+                  ! sort by gamma bar?
+                  if (isort .gt. 0) then
+                     do j = 1, nsort
+                        call set_to_bound(dy, dp, dn, yimp2, int(gbaridx(j)), 1, zimp2)
+                     end do
+                  else ! set the most sensitive factor to bound and update z;
+                     zimp2 = dynamic_set_to_bound(dy, dp, dn, yimp2, didx, 1)
+                  end if
 
                   ! check the new difference
                   diff2 = abs(zimp2 - var(simidx))
@@ -688,7 +701,7 @@ contains
       ! calculate +/- sensitivity
       dn = 0.d0
       dp = 0.d0
-      do i = 1, ngvarg + 1
+      do i = 1, ngvarg + 1 ! exclude the nugget here? should always be least sensitive.
          ytmp = y
          ytmp(1, i) = ytmp(1, i) - dy
          dn(i) = z - f(ytmp)
@@ -734,7 +747,7 @@ contains
       b = abs(dz)
       a = b - abs(c)
 
-      ! sort indices by delta
+      ! sort indices by delta - least to most sensitive
       d = abs(dp - dn)
       call sortem(1, ngvarg, d, 3, fidx, dp, dn, d, d, d, d, d)
       didx = fidx
@@ -1012,9 +1025,10 @@ contains
 
    end function findloc
 
-   function set_to_bound(dy, dp, dn, y, fidx, updn) result(z)
+   function dynamic_set_to_bound(dy, dp, dn, y, fidx, updn) result(z)
 
-      ! adjust the most sensitive factor to its sensitivity bound
+      ! determine the most sensitive factor to and set it 
+      ! to its sensitivity upper/lower bound
 
       real(8) :: dy, dp(:), dn(:), y(:, :)
       integer :: fidx(:)
@@ -1079,7 +1093,49 @@ contains
       ! calculate the new imputed value
       z = f(y)
 
-   end function set_to_bound
+   end function dynamic_set_to_bound
+
+   subroutine set_to_bound(dy, dp, dn, y, idx, updn, z)
+
+      !
+      ! Set the specified factor index to its upper/lower sensitivity bound.
+      ! This subroutine modifies the y vector so multiple sucessive 
+      ! adjustments can be made.
+      !
+
+      real(8) :: dy, dp(:), dn(:), y(:, :)
+      integer :: idx
+      integer :: updn ! increase (1) or decrease (0) z
+      real(8) :: z
+
+      if (updn .eq. 0) then
+         ! if we are decreasing z the two scenarios are:
+         ! 1. dp is pos and inv is true
+         ! 2. dn is pos and inv is false
+
+         if (dp(idx) .gt. dn(idx)) then
+            y(1, idx) = y(1, idx) + dy
+         else
+            y(1, idx) = y(1, idx) - dy
+         end if
+
+      else if (updn .eq. 1) then
+         ! if we are increasing z the two scenarios are:
+         ! 1. dp is neg and inv is false
+         ! 2. dn is neg and inv is true
+
+         if (dp(idx) .lt. dn(idx)) then
+            y(1, idx) = y(1, idx) + dy
+         else
+            y(1, idx) = y(1, idx) - dy
+         end if
+
+      end if
+
+      ! calculate the new imputed value
+      z = f(y)
+
+   end subroutine set_to_bound
 
    function f(y) result(z)
 
