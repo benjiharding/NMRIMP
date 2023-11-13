@@ -1015,6 +1015,27 @@ contains
 
    end subroutine merge
 
+   subroutine reverse(a)
+
+    ! reverse the order of array a
+
+      real(8) :: a(:), tmp
+      integer :: n, h, t
+      
+      n = size(a, dim=1)
+      h = 1
+      t = n
+      do
+        if (h .ge. t) exit
+        tmp = a(h)
+        a(h) = a(t)
+        a(t) = tmp
+        h = h + 1
+        t = t - 1
+      end do
+
+   end subroutine reverse
+
    function unique(list)
     !! usage sortedlist=Unique(list)
       implicit none
