@@ -190,7 +190,7 @@ contains
       call reverse(gbaridx)
 
       ! number of factors to consider for gbar sorting
-      nsort = ceiling(ngvarg * 1./3.)
+      nsort = ceiling(ngvarg*1./3.)
 
    end subroutine init_imputer
 
@@ -822,7 +822,7 @@ contains
          end if
 
          if (i .gt. 1000) then
-            write (*, *) "infinte loop in binary search"
+            ! write (*, *) "infinte loop in binary search"
             return
          end if
       end do
@@ -855,7 +855,7 @@ contains
             call gauinv(p, xp, ierr)
             yref(i, j) = xp
          end do
-         ! write (*, *) minval(yref(:, j)), maxval(yref(:, j))
+         write (*, *) minval(yref(:, j)), maxval(yref(:, j))
       end do
 
       ! calculate the corresponding z values
@@ -1027,7 +1027,7 @@ contains
 
    function dynamic_set_to_bound(dy, dp, dn, y, fidx, updn) result(z)
 
-      ! determine the most sensitive factor to and set it 
+      ! determine the most sensitive factor to and set it
       ! to its sensitivity upper/lower bound
 
       real(8) :: dy, dp(:), dn(:), y(:, :)
@@ -1052,7 +1052,7 @@ contains
          if (.not. any(ii) .and. .not. any(jj)) then
             i = 1
             j = 1
-            write (*, *) "both masks are false"
+            ! write (*, *) "both masks are false"
          else
             i = maxloc(dp, dim=1, mask=ii)
             j = maxloc(dn, dim=1, mask=jj)
@@ -1076,7 +1076,7 @@ contains
          if (.not. any(ii) .and. .not. any(jj)) then
             i = 1
             j = 1
-            write (*, *) "both masks are false"
+            ! write (*, *) "both masks are false"
          else
             i = minloc(dp, dim=1, mask=ii)
             j = minloc(dn, dim=1, mask=jj)
@@ -1099,7 +1099,7 @@ contains
 
       !
       ! Set the specified factor index to its upper/lower sensitivity bound.
-      ! This subroutine modifies the y vector so multiple sucessive 
+      ! This subroutine modifies the y vector so multiple sucessive
       ! adjustments can be made.
       !
 
