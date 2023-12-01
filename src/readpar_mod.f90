@@ -6,6 +6,7 @@ module readpar_mod
    use vario_mod, only: set_sill, set_rotmatrix
    use constants, only: EPSLON, MAXGNST
    use subs, only: nscore
+   use omp_lib, only: omp_get_max_threads
 
    implicit none
 
@@ -199,6 +200,30 @@ contains
       read (lin, *, iostat=test) tol1, tol2
       if (test .ne. 0) stop "ERROR in parameter file"
       write (*, *) ' rejection tolerances for step 1 and 2: ', tol1, tol2
+
+      ! tolerances for imputations steps
+      read (lin, *, iostat=test) max_resim
+      if (test .ne. 0) stop "ERROR in parameter file"
+      write (*, *) ' maximum number of resimulations: ', max_resim
+
+      ! parallel processing
+      ipara = 0
+      read (lin, *, iostat=test) num_threads
+      if (test .ne. 0) stop "ERROR in parameter file"
+      if (num_threads .eq. 0) then
+         num_threads = 1
+         ipara = 0
+      end if
+      if (num_threads .eq. 1) write (*, *) "performing serial imputation"
+      if (num_threads .gt. 1) then
+         ipara = 1
+         write (*, *) "performing parallel imputation with", num_threads, "threads"
+      end if
+      if (num_threads .lt. 0) then
+         ipara = 1
+         num_threads = omp_get_max_threads()
+         write (*, *) "performing parallel imputation with", num_threads, "threads"
+      end if
 
       ! Gaussian pool file
       read (lin, '(a256)', iostat=test) poolfile

@@ -10,6 +10,7 @@ module impute_mod
    use constants, only: MINCOV, IMPEPS, EPSLON, SMALLDBLE
    use subs, only: shuffle, gauinv, gcum, sortem, nscore, &
                    locate, powint, dblecumsum, reverse
+   use omp_lib
 
    implicit none
 
@@ -25,8 +26,7 @@ contains
       real(8) :: start, finish
       integer :: ireal, nresim, i, j, luidx, nlook
       integer, allocatable :: rsidx(:), idxs(:) ! resim indices
-
-      call cpu_time(start)
+      integer :: id, first, last
 
       write (*, *) " "
       write (*, *) "Starting imputation..."
@@ -38,9 +38,31 @@ contains
       call init_imputer()
 
       !
-      ! main loop over realizations
+      ! set threads
       !
-      REALLOOP: do ireal = 1, nreals
+      call omp_set_num_threads(num_threads)
+      start = omp_get_wtime()
+
+      !
+      ! begin parallel region
+      !
+      !$omp PARALLEL DEFAULT(NONE) &
+      !! $omp FIRSTPRIVATE(NONE) &
+      !$omp PRIVATE(rhs, lhs, kwts, nuse, useidx, sim, isim, randpath, &
+      !$omp cmeans, cstdevs, zinit, results, j, idxs, rsidx, nresim, id, &
+      !$omp first, last, ireal, nlook, luidx) &
+      !$omp SHARED(imputed, nreals, xyz, anisxyz, nsearch, iter1, trees, pool, &
+      !$omp iter2, tol1, tol2, gbar, gbaridx, max_resim, ndata, var,  &
+      !$omp zref, nsref, yref, usnsref, num_threads, idbg, nfact, ngvarg)
+
+      id = omp_get_thread_num()
+      first = (id*nreals)/num_threads + 1
+      last = ((id + 1)*nreals)/num_threads
+
+      !
+      ! simulate for this thread's realization indices
+      !
+      REALLOOP: do ireal = first, last
 
          write (*, *) "imputing realization", ireal
 
@@ -65,7 +87,7 @@ contains
             call nmr_imputer(pool, ireal, nsearch, imputed, iter1, iter2, &
                              tol1, tol2, nresim, rsidx, idxs)
 
-            if (j .gt. 50) exit
+            if (j .gt. max_resim) exit
 
          end do
 
@@ -92,8 +114,9 @@ contains
          end if
 
       end do REALLOOP
+      !$omp END PARALLEL
 
-      call cpu_time(finish)
+      finish = omp_get_wtime()
 
       write (*, *) " "
       print '("Imputation took ", f5.2, " minutes")', (finish - start)/60
@@ -597,8 +620,6 @@ contains
          end do
 
       end do DATALOOP
-
-      if (nlook .gt. 0) write (*, *) nlook, "values taken from lookup table"
 
       ! grab the resim indices from the que array if required
       nresim = nr

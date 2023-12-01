@@ -30,6 +30,8 @@ contains
       write (99, "(A)") '40                                - maximum previously simulated nodes'
       write (99, "(A)") '50000 10000                       - maximum iterations for step 1 and step 2'
       write (99, "(A)") '0.1 0.01                          - rejection tolerances for step 1 and step 2'
+      write (99, "(A)") '50                                - maximum number of resimulations'
+      write (99, "(A)") '-1                                - num. threads for parallel imputation (1=serial, -1 for all)'
       write (99, "(A)") 'pool.dat                          - file with covariance structs. of Gaussian pool'
       close (99)
 

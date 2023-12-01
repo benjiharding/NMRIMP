@@ -30,6 +30,7 @@ module geostat
    integer :: rseed
    integer :: iter1, iter2
    real(8) :: tol1, tol2
+   integer :: max_resim
 
    ! normal equations
    real(8), allocatable :: rhs(:), lhs(:, :), kwts(:)
@@ -71,6 +72,9 @@ module geostat
    ! Gaussian pool parameters
    integer :: ngvarg
    type(variogram), allocatable :: pool(:)
+
+   ! parallel processing
+   integer :: num_threads, ipara
 
    ! output file
    integer :: lout, ldbg, lmom
