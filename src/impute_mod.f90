@@ -855,7 +855,7 @@ contains
             call gauinv(p, xp, ierr)
             yref(i, j) = xp
          end do
-         write (*, *) minval(yref(:, j)), maxval(yref(:, j))
+         ! write (*, *) minval(yref(:, j)), maxval(yref(:, j))
       end do
 
       ! calculate the corresponding z values
