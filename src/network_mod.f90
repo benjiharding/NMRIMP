@@ -1,6 +1,6 @@
 module network_mod
 
-   use geostat, only: nnet, wts
+   use geostat
    use types_mod, only: network
    use subs, only: nscore
    use mtmod, only: grnd
@@ -190,23 +190,6 @@ contains
          end if
          Amat = f_ptr(Znorm)
 
-         ! ! forward pass - activation prior to BN
-         ! b = spread(b(1, :), 1, size(A_prev, dim=1))
-         ! Zmat = matmul(A_prev, W) + b
-         ! Amat = f_ptr(Zmat)
-         ! if (norm) then
-         !    if (calc_mom) then
-         !       call normalize_input(Amat, Anorm, net, i, calc_mom=.true., &
-         !                            gmma=net%layer(i)%gmma, beta=net%layer(i)%beta)
-         !    else
-         !       if (.not. allocated(net%layer(i)%nnmu)) stop "moment vectors must be allocated"
-         !       call normalize_input(Amat, Anorm, net, i, calc_mom=.false., &
-         !                            mu=net%layer(i)%nnmu, sig=net%layer(i)%nnsig, &
-         !                            gmma=net%layer(i)%gmma, beta=net%layer(i)%beta)
-         !    end if
-         !    Amat = Anorm
-         ! end if
-
       end do
 
       ! output layer
@@ -234,13 +217,22 @@ contains
 
       ! normal score transform if required
       if (nstrans) then
+
          do i = 1, size(AL)
             AL(i) = AL(i) + grnd()*SMALLDBLE ! random despike
          end do
-         call nscore(size(AL), AL, dble(-1.0e21), dble(1.0e21), 1, &
-                     wts, tmp, vrg, ierr)
-         if (ierr .gt. 0) stop "Error in normal score transform"
-         AL = vrg
+
+         ! call nscore(size(AL), AL, dble(-1.0e21), dble(1.0e21), 1, &
+         !             wts, tmp, vrg, ierr)
+         ! if (ierr .gt. 0) stop "Error in normal score transform"
+         ! AL = vrg
+
+         ! dead nuerons can happen here with ReLU if all
+         ! activations are < 0
+         ! scale output within ranges of data
+         ! this **does not** preserve quantiles like nscore
+         AL = minmax_scaler(AL, minval(var), maxval(var))
+
       end if
 
    end subroutine network_forward
@@ -345,6 +337,20 @@ contains
       end do
 
    end subroutine normalize_input
+
+   function minmax_scaler(X, min_, max_) result(X_scaled)
+
+      ! linear scaling of X within [min_, max_]
+
+      real(8), intent(in) :: X(:)
+      real(8), intent(in) :: min_, max_
+      real(8) :: X_scaled(size(X))
+      real(8) :: X_std(size(X))
+
+      X_std = (X - minval(X))/(maxval(X) - minval(X))
+      X_scaled = X_std*(max_ - min_) + min_
+
+   end function minmax_scaler
 
    function relu(yval) result(a)
 

@@ -3,7 +3,7 @@ module impute_mod
    use geostat
    use kdtree2_module
    use mtmod, only: grnd, gaussrnd
-   use network_mod, only: network_forward
+   use network_mod, only: network_forward, minmax_scaler
    use types_mod, only: variogram, network, kdtrees
    use vario_mod, only: set_sill, set_rotmatrix, gammabar
    use covasubs, only: get_cov
@@ -866,8 +866,11 @@ contains
       do i = 1, nsamp
          zref(i) = zref(i) + grnd()*SMALLDBLE ! random despike
       end do
-      call nscore(nsamp, zref, dble(-1e21), dble(1e21), 1, wt, &
-                  tmp, nsref, ierr)
+
+      ! call nscore(nsamp, zref, dble(-1e21), dble(1e21), 1, wt, &
+      !             tmp, nsref, ierr)
+
+      nsref = minmax_scaler(zref, minval(var), maxval(var))
 
       ! keep an unsorted NS copy for lookup table
       usnsref = nsref
