@@ -116,7 +116,7 @@ contains
       allocate (results(ndata), anisxyz(3, ndata))
       allocate (cmeans(ngvarg + 1), cstdevs(ngvarg + 1)) ! +1 for nugget
       allocate (imputed(ndata, ngvarg + 2, nreals)) ! +2 for nugget and zval
-      allocate (zinit(ndata, nreals)) ! +2 for nugget and zval
+      allocate (zinit(ndata, nreals))
       allocate (yref(nsamp, ngvarg + 1))
       allocate (trees(ngvarg))
       allocate (gbar(ngvarg), gbaridx(ngvarg))
