@@ -39,6 +39,8 @@ module types_mod
       integer :: ireg ! regularizer (0=none, 1=L1, 2=L2)
       real(8) :: regconst ! regularization constant
       logical :: norm ! batch normalization?
+      real(8), allocatable :: awts(:, :) ! wts
+      real(8), allocatable :: omega(:) ! exponents
    end type network
 
    ! kdtree pointers
