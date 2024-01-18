@@ -859,8 +859,7 @@ contains
       end do
 
       ! calculate the corresponding z values
-      call network_forward(nnet, yref, zref, nstrans=.false., &
-                           norm=nnet%norm, calc_mom=.true.)
+      call network_forward(nnet, yref, zref, nstrans=.false.)
 
       ! normal score to build transform table
       do i = 1, nsamp
@@ -1144,7 +1143,7 @@ contains
       real(8), intent(in) :: y(:, :)
       real(8) :: zz(1), z
 
-      call network_forward(nnet, y, zz, .false., nnet%norm, .false.)
+      call network_forward(nnet, y, zz, nstrans=.false.)
       call transform_to_refcdf(zz(1), zref, nsref, zz(1))
       z = zz(1)
 
@@ -1157,7 +1156,7 @@ contains
       real(8), intent(in) :: y(:, :)
       real(8) :: aa(1), a
 
-      call network_forward(nnet, y, aa, .false., nnet%norm, .false.)
+      call network_forward(nnet, y, aa, nstrans=.false.)
       a = aa(1)
 
    end function nmr
