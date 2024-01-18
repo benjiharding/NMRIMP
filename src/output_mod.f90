@@ -20,12 +20,14 @@ contains
          end do
       end do
 
-      do i = 1, nnet%nl - 1
-         do j = 1, nnet%layer(i)%sb(1)
-            write (lmom, "(*(g14.8,1x))") nnet%layer(i)%nnmu(j), &
-               nnet%layer(i)%nnsig(j)
+      if (nnet%norm) then
+         do i = 1, nnet%nl - 1
+            do j = 1, nnet%layer(i)%sb(1)
+               write (lmom, "(*(g14.8,1x))") nnet%layer(i)%nnmu(j), &
+                  nnet%layer(i)%nnsig(j)
+            end do
          end do
-      end do
+      end if
 
    end subroutine write_files
 

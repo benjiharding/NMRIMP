@@ -178,12 +178,14 @@ contains
       call chknam(nnwtsfile, 256)
       write (*, "(2a)") '  output file: ', trim(adjustl(nnwtsfile))
 
-      ! open the output file for layer moments
-      open (lmom, file="moments.out", status="UNKNOWN")
-      write (lmom, "(A)") "Network Moments"
-      write (lmom, "(i2)") 2
-      write (lmom, "(A)") "mu"
-      write (lmom, "(A)") "sigma"
+      ! open the output file for layer moments if required
+      if (nnet%norm) then
+         open (lmom, file="moments.out", status="UNKNOWN")
+         write (lmom, "(A)") "Network Moments"
+         write (lmom, "(i2)") 2
+         write (lmom, "(A)") "mu"
+         write (lmom, "(A)") "sigma"
+      end if
 
       ! previously simulated nodes to consider
       read (lin, *, iostat=test) nsearch
