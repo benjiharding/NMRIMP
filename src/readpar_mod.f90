@@ -356,9 +356,9 @@ contains
       write (lout, "(A)") "x"
       write (lout, "(A)") "y"
       write (lout, "(A)") "z"
-      write (lout, "(A)") "data value"
-      write (lout, "(A)") "imputed value"
-      write (lout, "(A)") "nmr value"
+      write (lout, "(A)") "Data value"
+      write (lout, "(A)") "Imputed value"
+      write (lout, "(A)") "Raw activation"
       do iv = 1, ngvarg + 1
          write (lout, "(a6, i3)") "Factor", iv
       end do
