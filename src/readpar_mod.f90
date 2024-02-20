@@ -22,7 +22,7 @@ contains
       character(256) :: str
       integer :: lin
       logical :: testfl
-      integer :: test, i, j, iv, tmp
+      integer :: test, i, j, iv, tmp, L
       integer :: dhcol, xyzcols(3), varcol, wtcol, ncols, numwts
       real(8) :: tmin, tmax
       real(8), allocatable :: nnwts(:)
@@ -169,7 +169,7 @@ contains
 
       ! initilaze the network
       call init_network(nnet)
-      allocate (nnwts(nnet%dims), stat=test)
+      allocate (nnwts(nnet%dims*2), stat=test)
       if (test .ne. 0) stop "allocation failed due to insufficient memory!"
 
       ! network wts input
@@ -313,7 +313,7 @@ contains
       end do
 
       ! check weights match specified network architecture
-      if (numwts .ne. nnet%dims) stop "ERROR Network weight dimensions do not &
+      if (numwts .ne. nnet%dims*2) stop "ERROR Network weight dimensions do not &
 &      match the specified network architecture!"
 
       allocate (tmpwts(1), stat=test)
@@ -326,6 +326,7 @@ contains
       end do
 
       ! read file again, but storing weights
+      ! including precedence and sigmoid wts
       numwts = 0
       do
          read (lin, *, iostat=test) tmpwts(:)
@@ -336,7 +337,13 @@ contains
       end do
 
       ! reshape the weight vector into matrices
-      call vector_to_matrices(nnwts, nnet)
+      L = nnet%ld(1)
+      call vector_to_matrices(nnwts(1:2*L), nnet)
+
+      ! allocate precedence arrays
+      allocate (fprec(L), sigwt(L))
+      fprec = nnwts(2*L + 1:3*L)
+      sigwt = nnwts(3*L + 1:4*L)
 
       ! start reading Gaussian pool file
       write (*, *) " "
