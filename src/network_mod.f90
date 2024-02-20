@@ -1,6 +1,6 @@
 module network_mod
 
-   use geostat, only: nnet, wts, ndata, ngvarg, nsamp
+   use geostat, only: var, nnet, wts, ndata, ngvarg, nsamp, fprec, sigwt
    use types_mod, only: network
    use subs, only: nscore, powint, locate, sortem
    use mtmod, only: grnd
@@ -260,28 +260,67 @@ contains
 
    ! end subroutine network_forward
 
-   subroutine network_forward(net, Ymat, AL, nstrans, ttable)
+   ! subroutine network_forward(net, Ymat, AL, nstrans, ttable)
+
+   !    ! parameters
+   !    type(network), intent(inout) :: net ! neural network object
+   !    real(8), intent(in) :: Ymat(:, :) ! simulated factors
+   !    logical, intent(in) :: nstrans ! nscore transform flag
+   !    real(8), optional :: ttable(:, :) ! transform table
+
+   !    ! return
+   !    real(8), intent(inout) :: AL(:) ! output mixture vector
+
+   !    ! locals
+   !    real(8), allocatable :: Amat(:, :), ZL(:, :)
+   !    integer :: i
+
+   !    ! forward pass; assumes single layer network
+   !    Amat = Ymat
+   !    do i = 1, net%ld(1)
+   !       Amat(:, i) = power(Ymat(:, i), net%omega(i))
+   !    end do
+   !    ZL = matmul(Amat, transpose(net%awts))
+   !    AL = ZL(:, 1)
+
+   !    ! random despike and normal score transform
+   !    if (nstrans) then
+   !       do i = 1, ndata
+   !          AL(i) = AL(i) + grnd()*SMALLDBLE
+   !          call transform_to_refcdf(AL(i), ttable, AL(i), nsamp)
+   !       end do
+   !    end if
+
+   ! end subroutine network_forward
+
+   subroutine network_forward(net, Ymat, AL, nstrans, fprec, sigwt, ttable)
 
       ! parameters
       type(network), intent(inout) :: net ! neural network object
       real(8), intent(in) :: Ymat(:, :) ! simulated factors
       logical, intent(in) :: nstrans ! nscore transform flag
+      integer, intent(in) :: fprec(:) ! factor precedence
+      real(8), intent(in) :: sigwt(:) ! sigmoid weight
       real(8), optional :: ttable(:, :) ! transform table
 
       ! return
       real(8), intent(inout) :: AL(:) ! output mixture vector
 
       ! locals
-      real(8), allocatable :: Amat(:, :), ZL(:, :)
-      integer :: i
+      real(8), allocatable :: fw(:)
+      integer :: i, j, fp
 
-      ! forward pass; assumes single layer network
-      Amat = Ymat
+      ! weight factor with highest precedence
+      fp = minloc(fprec, dim=1)
+      fw = sigmoid1d(Ymat(:, fp)*sigwt(fp))
+      AL = net%awts(1, fp)*power(Ymat(:, fp), net%omega(fp), 1.d0)
+
+      ! forward pass through remaining factors
       do i = 1, net%ld(1)
-         Amat(:, i) = power(Ymat(:, i), net%omega(i))
+         j = fprec(i)
+         if (j .eq. fp) cycle
+         AL = AL + net%awts(1, j)*power(Ymat(:, j), net%omega(j), 1.d0)*fw
       end do
-      ZL = matmul(Amat, transpose(net%awts))
-      AL = ZL(:, 1)
 
       ! random despike and normal score transform
       if (nstrans) then
@@ -315,7 +354,8 @@ contains
       wt = 1.d0
 
       ! calculate the corresponding z values
-      call network_forward(net, yref, zref, nstrans=.false.)
+      call network_forward(net, yref, zref, nstrans=.false., fprec=fprec, &
+                           sigwt=sigwt)
 
       ! normal score to build transform table
       do i = 1, nsamp
@@ -526,6 +566,17 @@ contains
 
    end function sigmoid
 
+   function sigmoid1d(yval) result(a)
+
+      ! sigmoid activation
+
+      real(8), intent(in) :: yval(:)
+      real(8) :: a(size(yval))
+
+      a = 1.d0/(1.d0 + dexp(-yval))
+
+   end function sigmoid1d
+
    function hyptan(yval) result(a)
 
       ! hyperbolic tangent activation
@@ -548,16 +599,17 @@ contains
 
    end function linear
 
-   function power(yval, w) result(a)
+   function power(yval, w, f) result(a)
 
       ! power activation function
       real(8), intent(in) :: yval(:)
-      real(8), intent(in) :: w
+      real(8), intent(in) :: w ! trainable exponent
+      real(8), intent(in) :: f ! scale factor
       real(8) :: a(size(yval))
 
-      a = yval
-      where (yval .gt. 0.d0) a = yval**w
-      where (yval .lt. 0.d0) a = abs(yval)**(1/w)*-(1.d0)
+      a = yval/f
+      where (yval .gt. 0.d0) a = f*(a**w)
+      where (yval .lt. 0.d0) a = f*(abs(a)**(1/w)*-(1.d0))
 
    end function power
 
