@@ -72,6 +72,10 @@ module geostat
    integer :: ngvarg
    type(variogram), allocatable :: pool(:)
 
+   ! factor precedence
+   integer, allocatable :: fprec(:)
+   real(8), allocatable :: sigwt(:) ! sigmoid weighting factor
+
    ! output file
    integer :: lout, ldbg, lmom
 
