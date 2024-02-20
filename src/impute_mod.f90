@@ -550,13 +550,14 @@ contains
 
             ! break if we need to
             if (k2 .ge. iter2) then
-               write (*, *) " "
-               write (*, *) "solution polishing did not converge after", iter2, &
-                  "iterations at data index", simidx, "diff=", diff2
+               if (idbg .gt. 1) then
+                  write (*, *) " "
+                  write (*, *) "solution polishing did not converge after", iter2, &
+                     "iterations at data index", simidx, "diff=", diff2
 
-               ! write (*, *) yimp2
-               ! write (*, *) " "
-
+                  ! write (*, *) yimp2
+                  ! write (*, *) " "
+               end if
                exit
             end if
 
@@ -594,11 +595,12 @@ contains
          ! update this location and factor as simulated
          do igv = 1, ngvarg
             isim(simidx, igv) = 1
+            ! if (diff2 .gt. tol2) isim(simidx, igv) = 0 ! flag for lookup
          end do
 
       end do DATALOOP
 
-      if (nlook .gt. 0) write (*, *) nlook, "values taken from lookup table"
+      ! if (nlook .gt. 0) write (*, *) nlook, "values taken from lookup table"
 
       ! grab the resim indices from the que array if required
       nresim = nr
@@ -821,7 +823,7 @@ contains
             if (.not. inv) n = k ! decrease upper bound
          end if
 
-         if (i .gt. 1000) then
+         if (i .gt. 10000) then
             ! write (*, *) "infinte loop in binary search"
             return
          end if
@@ -859,7 +861,8 @@ contains
       end do
 
       ! calculate the corresponding z values
-      call network_forward(nnet, yref, zref, nstrans=.false.)
+      call network_forward(nnet, yref, zref, nstrans=.false., fprec=fprec, &
+                           sigwt=sigwt)
 
       ! normal score to build transform table
       do i = 1, nsamp
@@ -1143,7 +1146,8 @@ contains
       real(8), intent(in) :: y(:, :)
       real(8) :: zz(1), z
 
-      call network_forward(nnet, y, zz, nstrans=.false.)
+      call network_forward(nnet, y, zz, nstrans=.false., fprec=fprec, &
+                           sigwt=sigwt)
       call transform_to_refcdf(zz(1), zref, nsref, zz(1))
       z = zz(1)
 
@@ -1156,7 +1160,8 @@ contains
       real(8), intent(in) :: y(:, :)
       real(8) :: aa(1), a
 
-      call network_forward(nnet, y, aa, nstrans=.false.)
+      call network_forward(nnet, y, aa, nstrans=.false., fprec=fprec, &
+                           sigwt=sigwt)
       a = aa(1)
 
    end function nmr
