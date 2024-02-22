@@ -22,7 +22,9 @@ module geostat
    integer, allocatable :: isim(:, :) ! (ndata, nfact)
    real(8), allocatable :: sim(:, :) ! (ndata, nfact)
    real(8), allocatable :: anisxyz(:, :)
-   integer, allocatable :: randpath(:)
+   real(8), allocatable :: abratio(:, :) ! (ndata, nreals)
+   integer, allocatable :: rp1(:), rp2(:), randpath(:)
+   integer, allocatable :: rsc(:, :) ! resim count
    integer :: nsearch
    integer :: nreals
    integer :: nfact
@@ -38,7 +40,6 @@ module geostat
 
    ! reference distribution
    integer, parameter :: nsamp = 1000000
-   integer :: nlook
    real(8) :: zref(nsamp)
    real(8), allocatable :: nsref(:), yref(:, :)
    real(8) :: usnsref(nsamp)
@@ -74,7 +75,10 @@ module geostat
 
    ! factor precedence
    integer, allocatable :: fprec(:)
+   real(8), allocatable :: fprec_r(:), fidx(:)
    real(8), allocatable :: sigwt(:) ! sigmoid weighting factor
+   real(8) :: qfp, tfp ! quantile and threshold for factor with preference
+   real(8), allocatable :: ub(:), lb(:)
 
    ! output file
    integer :: lout, ldbg, lmom
