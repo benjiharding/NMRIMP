@@ -11,6 +11,7 @@ module constants
    integer, parameter :: MAXNST = 4
    integer, parameter :: MAXGNST = 1 ! max nst for Gaussian variograms
    real(8), parameter :: MINCOV = 1e-3
+   integer, parameter :: MAXRESIM = 50
 
 contains
 
