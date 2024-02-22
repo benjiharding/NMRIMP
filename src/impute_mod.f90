@@ -2,14 +2,13 @@ module impute_mod
 
    use geostat
    use kdtree2_module
-   use mtmod, only: grnd, gaussrnd
+   use mtmod, only: grnd
    use network_mod, only: network_forward
    use types_mod, only: variogram, network, kdtrees
    use vario_mod, only: set_sill, set_rotmatrix, gammabar
    use covasubs, only: get_cov
-   use constants, only: MINCOV, IMPEPS, EPSLON, SMALLDBLE
-   use subs, only: shuffle, gauinv, gcum, sortem, nscore, &
-                   locate, powint, dblecumsum, reverse
+   use constants, only: MINCOV, EPSLON, SMALLDBLE, MAXRESIM
+   use subs, only: shuffle, gauinv, sortem, powint, locate, nscore
 
    implicit none
 
@@ -24,7 +23,7 @@ contains
 
       real(8) :: start, finish
       integer :: ireal, nresim, i, j, luidx, nlook
-      integer, allocatable :: rsidx(:), idxs(:) ! resim indices
+      integer, allocatable :: rsidxs(:), idxs(:) ! resim indices
 
       call cpu_time(start)
 
@@ -47,25 +46,24 @@ contains
          j = 0
          nresim = 0
          call nmr_imputer(pool, ireal, nsearch, imputed, iter1, iter2, &
-                          tol1, tol2, nresim, rsidx)
+                          tol1, tol2, nresim, rsidxs)
 
          ! do we need to resim any locations?
          ! nresim is updated by call to imputer
          do while (nresim .gt. 0)
 
             j = j + 1
+            if (j .gt. MAXRESIM) exit
 
             if (idbg .gt. 1) write (*, *) "resimulating at", nresim, "locations"
 
             ! reset the sim indicators for these locations
-            idxs = rsidx
-            isim(rsidx, :) = 0
+            idxs = rsidxs
+            isim(rsidxs, :) = 0
 
             ! call the imputer again
             call nmr_imputer(pool, ireal, nsearch, imputed, iter1, iter2, &
-                             tol1, tol2, nresim, rsidx, idxs)
-
-            if (j .gt. 50) exit
+                             tol1, tol2, nresim, rsidxs, idxs, j)
 
          end do
 
@@ -79,16 +77,15 @@ contains
                                     imputed(i, 1:nfact, ireal), luidx)
                   zinit(i, ireal) = zref(luidx)
                   nlook = nlook + 1
+                  if (idbg .ge. 1) then
+                     write (*, *) "value taken from lookup table at data index ", i
+                  end if
                end if
             end do
          end if
 
-         if (idbg .gt. 1) then
-            if (nlook .gt. 0) write (*, *) nlook, "values taken from lookup table"
-         end if
-
-         if (nlook .gt. int(ndata*0.05)) then
-            write (*, *) "Warning: more than 5% of values taken from lookup table"
+         if (nlook .gt. int(ndata*0.01)) then
+            write (*, *) "Warning: more than 1% of values taken from lookup table"
          end if
 
       end do REALLOOP
@@ -107,7 +104,7 @@ contains
       ! and allocating the required arrays
       !
 
-      integer :: i, igv, ierr
+      integer :: i, j, igv, n, m
 
       ! allocate arrays based on number of data and max search
       allocate (rhs(nsearch), lhs(nsearch, nsearch), kwts(nsearch))
@@ -120,9 +117,11 @@ contains
       allocate (yref(nsamp, ngvarg + 1))
       allocate (trees(ngvarg))
       allocate (gbar(ngvarg), gbaridx(ngvarg))
+      allocate (abratio(ndata, nreals), rsc(ndata, nreals))
 
       ! intization simulation indicator
       isim = 0
+      rsc = 0
 
       ! build reference distribution for transformations
       call build_refcdf(nsamp, zref, nsref, yref, usnsref) ! this also calc norm moments
@@ -137,19 +136,11 @@ contains
          write (ldbg, "(*(g14.8,1x))") dble(i)/(dble(nsamp) + 1.d0), zref(i), nsref(i)
       end do
 
-      ! build declustered data cdf for quantile lookup
-      vsort = var
-      wsort = wts/sum(wts)
-      vord = [(i, i=1, ndata)]
-      call sortem(1, ndata, vsort, 2, wsort, vord, vsort, vsort, vsort, vsort, &
-                  vsort, vsort)
-      vcdf = dblecumsum(wsort)
-      vcdf = vcdf(2:)
-      vcdf = vcdf - vcdf(1)/2.0 ! midpoint
-
       ! min and max Gaussian values ~ [-4, 4]
-      call gauinv(0.0001d0, gmin, ierr)
-      call gauinv(0.9999d0, gmax, ierr)
+      ! call gauinv(0.0001d0, gmin, ierr)
+      ! call gauinv(0.9999d0, gmax, ierr)
+      gmin = -5.d0
+      gmax = 5.d0
 
       ! total number of factors, plus one for nugget
       nfact = ngvarg + 1
@@ -195,7 +186,7 @@ contains
    end subroutine init_imputer
 
    subroutine nmr_imputer(pool, ireal, nsearch, imputed, iter1, iter2, &
-                          tol1, tol2, nresim, rsidx, idxs)
+                          tol1, tol2, nresim, rsidxs, idxs, irs)
       !
       ! sequential Gaussian rejection imputation
       !
@@ -207,8 +198,9 @@ contains
       real(8), intent(in) :: tol1, tol2
       real(8), intent(out) :: imputed(:, :, :) ! (ndata, nfact, nreals)
       integer, intent(out) :: nresim
-      integer, allocatable, intent(out) :: rsidx(:)
-      integer, optional, intent(in) :: idxs(:)
+      integer, allocatable, intent(out) :: rsidxs(:)
+      integer, optional, intent(in) :: idxs(:) ! resim data indices
+      integer, optional, intent(in) :: irs ! resim realization index
 
       ! imputation
       integer, allocatable :: factpath(:)
@@ -236,20 +228,10 @@ contains
       integer :: que(ndata*nreset) ! max possible size
       logical :: iresim
 
-      ! dynamic tolerances
-      real(8) :: qv, qdiff
-      integer :: qidx, qj
-
       ! indexes
-      integer :: i, j, k1, k2, igv, iy, fi, luidx, idx
+      integer :: i, j, jj, k1, k2, igv, idx
 
       allocate (dp(ngvarg + 1), dn(ngvarg + 1), didx(ngvarg + 1))
-
-      !
-      ! define random path through nodes
-      !
-      randpath = [(i, i=1, ndata)]
-      call shuffle(randpath)
 
       ! resimulaiton flag
       iresim = .false.
@@ -259,7 +241,6 @@ contains
       if (.not. iresim) isim = 0 ! dont reset if resimulating
       useidx = 0
       nuse = 0
-      nlook = 0
 
       ! reset resim counter every realization
       nr = 0
@@ -342,29 +323,6 @@ contains
          cstdevs(ngvarg + 1) = 1.d0
 
          !
-         ! dyanmic tolerances
-         !
-         ! get the quantile of the variable we are trying to match
-         ! so we can find the corresponding activation in the refdist
-         !
-         call locate(vsort, ndata, 1, ndata, var(simidx), qj)
-         qj = min(max(1, qj), (ndata - 1))
-         qv = powint(vsort(qj), vsort(qj + 1), vcdf(qj), vcdf(qj + 1), &
-                     var(simidx), 1.d0)
-
-         ! find the index in nsamp that corresponds to qv
-         qidx = int(nsamp*qv)
-
-         ! get the difference between adjacent samples at this
-         ! position in the cdf
-         select case (nnet%af)
-         case (1:2) ! symmetric
-            qdiff = abs(nsref(qidx + 1) - nsref(qidx - 1))/2.d0
-         case (3:6) ! asymmetric
-            qdiff = abs(zref(qidx + 1) - zref(qidx - 1))/2.d0
-         end select
-
-         !
          ! now that we have the conditional moments for each factor,
          ! repeatedly simulate values and check against the first tolerance
          !
@@ -425,8 +383,6 @@ contains
          ! update conditioning array with intial coarse values
          zinit(simidx, ireal) = nmr(yimp1)
          sim(simidx, :) = yimp1(1, :)
-         ! imputed(simidx, 1:nfact, ireal) = yimp1(1, :)
-         ! imputed(simidx, nfact + 1, ireal) = zimp1
 
          !
          ! if the coarse search doesn't converge track the locations
@@ -436,6 +392,7 @@ contains
 
             ! track number of resets
             nr = nr + 1
+            rsc(simidx, ireal) = rsc(simidx, ireal) + 1
 
             ! get neighbouring indices to reset
             do j = 1, nreset
@@ -445,10 +402,15 @@ contains
             ! track data indices so we can revisit them
             que((nr - 1)*nreset + 1:nr*nreset) = reset_idx
 
+            ! cycle to start a new iteration of DATALOOP
+            if (.not. present(irs)) cycle
+
+            ! are we resimulating?
+            if (present(irs)) then
             ! cycle to start a new iteration of DATALOOP unless
-            ! we are resimulating
-            ! if (.not. present(idxs)) cycle
-            cycle
+               ! we are on the last resim iteration
+               if (irs .lt. MAXRESIM) cycle
+            end if
 
          end if
 
@@ -554,7 +516,6 @@ contains
                   write (*, *) " "
                   write (*, *) "solution polishing did not converge after", iter2, &
                      "iterations at data index", simidx, "diff=", diff2
-
                   ! write (*, *) yimp2
                   ! write (*, *) " "
                end if
@@ -563,22 +524,8 @@ contains
 
          end do POLISH
 
-         ! !
-         ! ! If the polish doesn't converge, grab the correct zval and corresponding
-         ! ! factors from the reference look up table. If there are only a few
-         ! ! samples that dont converge, variogram reproduction shound't be affected
-         ! ! too much.
-         ! !
-         ! if (diff2 .gt. tol2) then
-
-         !    ! grab NS z value and corresponding factors from table
-         !    call lookup_table(var(simidx), usnsref, yref, zimp2, yimp2, luidx)
-         !    zinit(simidx, ireal) = zref(luidx)
-
-         !    ! track lookups
-         !    nlook = nlook + 1
-
-         ! end if
+         ! polishing difficulty
+         abratio(simidx, ireal) = ab
 
          !
          ! update the conditioning values for this realization
@@ -595,21 +542,19 @@ contains
          ! update this location and factor as simulated
          do igv = 1, ngvarg
             isim(simidx, igv) = 1
-            ! if (diff2 .gt. tol2) isim(simidx, igv) = 0 ! flag for lookup
+            if (diff2 .gt. tol2) isim(simidx, igv) = 0 ! flag for lookup
          end do
 
       end do DATALOOP
 
-      ! if (nlook .gt. 0) write (*, *) nlook, "values taken from lookup table"
-
       ! grab the resim indices from the que array if required
       nresim = nr
       if (nr .gt. 0) then
-         allocate (rsidx(nr*nreset))
-         rsidx = que(1:nr*nreset)
+         allocate (rsidxs(nr*nreset))
+         rsidxs = que(1:nr*nreset)
       else
-         allocate (rsidx(1))
-         rsidx = 0
+         allocate (rsidxs(1))
+         rsidxs = 0
       end if
 
    end subroutine nmr_imputer
