@@ -5,7 +5,7 @@ module readpar_mod
    use network_mod, only: init_network, vector_to_matrices
    use vario_mod, only: set_sill, set_rotmatrix
    use constants, only: EPSLON, MAXGNST
-   use subs, only: nscore
+   use subs, only: nscore, gauinv
 
    implicit none
 
@@ -25,6 +25,7 @@ contains
       integer :: test, i, j, iv, tmp, L
       integer :: dhcol, xyzcols(3), varcol, wtcol, ncols, numwts
       real(8) :: tmin, tmax
+      integer :: ierr
       real(8), allocatable :: nnwts(:)
       real(8), allocatable :: tmpvar(:), tmpnsvar(:), tmpwts(:)
 
@@ -177,6 +178,18 @@ contains
       if (test .ne. 0) stop "ERROR in parameter file"
       call chknam(nnwtsfile, 256)
       write (*, "(2a)") '  output file: ', trim(adjustl(nnwtsfile))
+
+      ! threshold
+      read (lin, *, iostat=test) qfp
+      if (test .ne. 0) stop "ERROR in parameter file"
+      write (*, *) ' quantile to threshold factor with preference: ', qfp
+      call gauinv(qfp, tfp, ierr)
+      write (*, *) ' Gaussian threshold value: ', tfp
+
+      ! exclusion radius
+      read (lin, *, iostat=test) sr
+      if (test .ne. 0) stop "ERROR in parameter file"
+      write (*, *) ' exclusion radius for seeding high/low values ', sr
 
       ! open the output file for layer moments if required
       if (nnet%norm) then
@@ -358,7 +371,7 @@ contains
       ! open the output file and write headers now that we know ngvarg
       open (lout, file=outfile, status="UNKNOWN")
       write (lout, "(A)") "Imputed Data Values"
-      write (lout, "(i2)") 7 + ngvarg + 1
+      write (lout, "(i2)") 7 + ngvarg + 1 + 5
       write (lout, "(A)") "dhid"
       write (lout, "(A)") "x"
       write (lout, "(A)") "y"
@@ -369,6 +382,11 @@ contains
       do iv = 1, ngvarg + 1
          write (lout, "(a6, i3)") "Factor", iv
       end do
+      write (lout, "(A)") "Lower bound"
+      write (lout, "(A)") "Upper bound"
+      write (lout, "(A)") "a/b ratio"
+      write (lout, "(A)") "Resim count"
+      write (lout, "(A)") "Seeded"
 
       ! open the pool file
       open (lin, file=poolfile, status='OLD')

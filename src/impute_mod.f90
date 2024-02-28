@@ -8,7 +8,7 @@ module impute_mod
    use vario_mod, only: set_sill, set_rotmatrix, gammabar
    use covasubs, only: get_cov
    use constants, only: MINCOV, EPSLON, SMALLDBLE, MAXRESIM
-   use subs, only: shuffle, gauinv, sortem, powint, locate, nscore
+   use subs, only: shuffle, gauinv, sortem, powint, locate, nscore, reverse
 
    implicit none
 
@@ -28,13 +28,17 @@ contains
       call cpu_time(start)
 
       write (*, *) " "
-      write (*, *) "Starting imputation..."
+      write (*, *) "Initializing imputer..."
       write (*, *) " "
 
       !
       ! intitalize the imputer
       !
       call init_imputer()
+
+      write (*, *) " "
+      write (*, *) "Starting imputation..."
+      write (*, *) " "
 
       !
       ! main loop over realizations
@@ -104,7 +108,7 @@ contains
       ! and allocating the required arrays
       !
 
-      integer :: i, j, igv, n, m
+      integer :: i, igv, n
 
       ! allocate arrays based on number of data and max search
       allocate (rhs(nsearch), lhs(nsearch, nsearch), kwts(nsearch))
@@ -118,10 +122,13 @@ contains
       allocate (trees(ngvarg))
       allocate (gbar(ngvarg), gbaridx(ngvarg))
       allocate (abratio(ndata, nreals), rsc(ndata, nreals))
+      allocate (seeded(ndata, nreals))
+      allocate (lb(size(var, dim=1)), ub(size(var, dim=1))) ! constraints
 
       ! intization simulation indicator
       isim = 0
       rsc = 0
+      seeded = 0
 
       ! build reference distribution for transformations
       call build_refcdf(nsamp, zref, nsref, yref, usnsref) ! this also calc norm moments
@@ -136,11 +143,13 @@ contains
          write (ldbg, "(*(g14.8,1x))") dble(i)/(dble(nsamp) + 1.d0), zref(i), nsref(i)
       end do
 
-      ! min and max Gaussian values ~ [-4, 4]
-      ! call gauinv(0.0001d0, gmin, ierr)
-      ! call gauinv(0.9999d0, gmax, ierr)
-      gmin = -5.d0
-      gmax = 5.d0
+      ! min and max Gaussian values
+      gmin = minval(nsref)
+      gmax = maxval(nsref)
+
+      ! imputation bounds
+      lb = gmin
+      ub = gmax
 
       ! total number of factors, plus one for nugget
       nfact = ngvarg + 1
@@ -164,24 +173,11 @@ contains
                                            sort=.true., rearrange=.true.)
       end do
 
-      ! calcualte gammabar for each factor
-      gbaridx = [(igv, igv=1, ngvarg)]
-      gbar = 0.d0
-      do igv = 1, ngvarg
-         call gammabar(pool(igv), 10.d0, 10.d0, 10.d0, 4, 4, 4, gb)
-         gbar(igv) = gb
-      end do
-
-      ! this sort is ascending
-      call sortem(1, ngvarg, gbar, 1, gbaridx, gbar, gbar, gbar, &
-                  gbar, gbar, gbar, gbar)
-
-      ! reverse it so most continuous (smallest gbar) is last
-      call reverse(gbar)
-      call reverse(gbaridx)
-
-      ! number of factors to consider for gbar sorting
-      nsort = ceiling(ngvarg*1./3.)
+      ! sort precedence array for indexing
+      fidx = [(i, i=1, ngvarg + 1)]
+      fprec_r = fprec
+      call sortem(1, ngvarg + 1, fprec_r, 1, fidx, fidx, fidx, fidx, &
+                  fidx, fidx, fidx, fidx)
 
    end subroutine init_imputer
 
@@ -203,21 +199,19 @@ contains
       integer, optional, intent(in) :: irs ! resim realization index
 
       ! imputation
-      integer, allocatable :: factpath(:)
       real(8) :: zimp1, yimp1(1, ngvarg + 1)
       real(8) :: zimp2, yimp2(1, ngvarg + 1)
-      real(8) :: ztry(1), ytry(1, ngvarg + 1)
-      real(8) :: p, xp
+      real(8) :: ytry(1, ngvarg + 1)
+      real(8) :: p, xp, simt
       real(8) :: axyz(3)
       integer :: simidx, ierr
-      real(8) :: diff1, diff2, pert
+      real(8) :: diff1, diff2
       integer :: nfound
 
       ! factor sensitivity
       real(8), allocatable :: dp(:), dn(:)
       integer, allocatable :: didx(:)
-      real(8) :: dy, dz, a
-      integer :: as
+      real(8) :: dy, dz, a, ab
       logical :: inv(ngvarg + 1)
 
       ! resimulation
@@ -231,6 +225,7 @@ contains
       ! indexes
       integer :: i, j, jj, k1, k2, igv, idx
 
+      ! latent sensitivity arrays
       allocate (dp(ngvarg + 1), dn(ngvarg + 1), didx(ngvarg + 1))
 
       ! resimulaiton flag
@@ -244,6 +239,12 @@ contains
 
       ! reset resim counter every realization
       nr = 0
+
+      ! deallocate the previous path as size may change
+      if (allocated(rp1s)) deallocate (rp1s, rp2)
+
+      ! get the semi-random path for this iteration
+      call semirandom_path(ireal)
 
       !
       ! loop over data locations
@@ -336,11 +337,35 @@ contains
             k1 = k1 + 1
 
             ! simulate each factor at this simidx
-            do igv = 1, ngvarg + 1
+            do j = 1, ngvarg + 1
 
-               p = grnd()
-               call gauinv(p, xp, ierr)
-               sim(simidx, igv) = xp*cstdevs(igv) + cmeans(igv)
+               ! impute in order of precedence
+               igv = fidx(j)
+
+               ! accept/reject based on threshold
+               ! this only applies to factor with precedence
+               if (j .eq. 1) then
+                  p = grnd()
+                  call gauinv(p, xp, ierr)
+                  simt = xp*cstdevs(igv) + cmeans(igv)
+                  jj = 0
+                  do while ((simt .lt. lb(simidx)) .or. &
+                            (simt .gt. ub(simidx)))
+                     jj = jj + 1
+                     p = grnd()
+                     call gauinv(p, xp, ierr)
+                     simt = xp*cstdevs(igv) + cmeans(igv)
+                     if (jj .gt. 1000) then
+                        ! write (*, *) "Stuck in coarse resim!"
+                        exit
+                     end if
+                  end do
+                  sim(simidx, igv) = simt
+               else
+                  p = grnd()
+                  call gauinv(p, xp, ierr)
+                  sim(simidx, igv) = xp*cstdevs(igv) + cmeans(igv)
+               end if
 
                ! enforce reasonable min/max Gaussian values
                do while ((sim(simidx, igv) .lt. gmin) .or. &
@@ -390,28 +415,33 @@ contains
          !
          if (diff1 .ge. tol1) then
 
-            ! track number of resets
-            nr = nr + 1
-            rsc(simidx, ireal) = rsc(simidx, ireal) + 1
+            ! only reset the non-seeded locations
+            if (any(rp2 .eq. simidx)) then
 
-            ! get neighbouring indices to reset
-            do j = 1, nreset
-               reset_idx(j) = results(j)%idx
-            end do
+               ! track number of reset locations
+               nr = nr + 1
+               rsc(simidx, ireal) = rsc(simidx, ireal) + 1
 
-            ! track data indices so we can revisit them
-            que((nr - 1)*nreset + 1:nr*nreset) = reset_idx
+               ! get neighbouring indices to reset
+               do j = 1, nreset
+                  reset_idx(j) = results(j)%idx
+               end do
 
-            ! cycle to start a new iteration of DATALOOP
-            if (.not. present(irs)) cycle
+               ! track data indices so we can revisit them
+               que((nr - 1)*nreset + 1:nr*nreset) = reset_idx
 
-            ! are we resimulating?
-            if (present(irs)) then
-            ! cycle to start a new iteration of DATALOOP unless
-               ! we are on the last resim iteration
-               if (irs .lt. MAXRESIM) cycle
+               ! cycle to start a new iteration of DATALOOP
+               if (.not. present(irs)) cycle
+
+               ! are we resimulating?
+               if (present(irs)) then
+                  ! cycle to start a new iteration of DATALOOP unless
+                  ! we are on the last resim iteration
+                  if (irs .lt. MAXRESIM) cycle
+               end if
+               rsc(simidx, ireal) = rsc(simidx, ireal) - 1
+
             end if
-
          end if
 
          !
@@ -430,6 +460,7 @@ contains
          ! solution polishing
          !
          k2 = 0
+         ab = 0.d0
          POLISH: do while (diff2 .gt. tol2)
 
             k2 = k2 + 1
@@ -438,13 +469,14 @@ contains
             dz = var(simidx) - zimp2
             call latent_sensitivity(zimp2, yimp2, dz, dp, dn, &
                                     didx, a, dy, inv)
+            ! track the final ratio
+            ab = a/abs(dz)
 
             ! zimp is too high, we need to reduce
             if (dz .lt. 0.d0) then
 
                ! are we inside the sensitivity tolerances for negative dz?
                ! if so we can simply find a solution
-               ! if (a .gt. 0.d0) then
                if (a .lt. 0.d0) then
 
                   ! find the factor with the smallest delta that
@@ -456,7 +488,6 @@ contains
                   call binary_search(var(simidx), yimp2, dy, inv(didx(idx)), &
                                      didx(idx), tol2, zimp2, diff2)
 
-                  ! else if (a .lt. 0.d0) then
                else if (a .gt. 0.d0) then
                   ! if we are outside the senesitvity tolerances for negative
                   ! dz, we need to perturb and reasses the sensitivities
@@ -542,6 +573,7 @@ contains
          ! update this location and factor as simulated
          do igv = 1, ngvarg
             isim(simidx, igv) = 1
+            ! unless we didnt converge
             if (diff2 .gt. tol2) isim(simidx, igv) = 0 ! flag for lookup
          end do
 
@@ -558,6 +590,119 @@ contains
       end if
 
    end subroutine nmr_imputer
+
+   subroutine semirandom_path(ireal)
+
+      integer, intent(in) :: ireal
+
+      real(8), allocatable :: tvar(:)
+      type(kdtree2), pointer :: nntree ! euclidean nearest neighbour tree
+      type(kdtree2_result), allocatable :: nnresults(:)
+      real(8), allocatable :: txyz(:, :)
+      integer, allocatable :: tseed(:), exclude(:, :)
+      integer :: nfound
+      real(8) :: r2
+
+      integer :: i, j, n, m
+
+      ! define semi-random path through nodes to seed values
+      n = 0
+      do i = 1, ndata
+         if (var(i) .gt. tfp) n = n + 1
+      end do
+      allocate (rp1(n), rp1_r(n), tvar(n))
+      ! reset counters and track indices
+      n = 0
+      m = 0
+      do i = 1, ndata
+         if (var(i) .gt. tfp) then
+            n = n + 1
+            rp1(n) = i
+            tvar(n) = var(i) + grnd()*0.025 ! small random component for sorting
+         end if
+      end do
+      ! sort rp1 (locs > threshold) by tvar (grade > threshold)
+      rp1_r = real(rp1)
+      call sortem(1, n, tvar, 1, rp1_r, rp1_r, rp1_r, rp1_r, rp1_r, rp1_r, rp1_r, rp1_r)
+      call reverse(tvar) ! descending
+      call reverse(rp1_r) ! descending
+      rp1 = int(rp1_r)
+
+      ! build a euclidean kdtree for neighbour search
+      allocate (txyz(3, n))
+      do i = 1, n
+         txyz(:, i) = xyz(:, rp1(i))
+      end do
+      nntree => kdtree2_create(input_data=txyz, dim=3, &
+                               sort=.true., rearrange=.true.)
+
+      ! iterate over rp1 and reject samples within a distance threshold
+      allocate (tseed(n), exclude(n, n), nnresults(n))
+      tseed = 0
+      exclude = 0
+      r2 = sr**2
+      do i = 1, n
+         if (any(exclude .eq. rp1(i))) cycle
+         tseed(i) = rp1(i)
+         call kdtree2_r_nearest(tp=nntree, qv=txyz(:, i), &
+                                r2=r2, nfound=nfound, &
+                                nalloc=n, results=nnresults)
+         do j = 1, nfound
+            if (rp1(nnresults(j)%idx) .eq. rp1(i)) cycle
+            if (nnresults(j)%dis .lt. r2) then
+               exclude(j - 1, i) = rp1(nnresults(j)%idx)
+            else
+               cycle
+            end if
+         end do
+      end do
+
+      ! get the final seed indices above the threshold
+      allocate (rp1s(count(tseed > 0)))
+      n = 0
+      do i = 1, size(tseed)
+         if (tseed(i) .gt. 0) then
+            n = n + 1
+            rp1s(n) = tseed(i)
+         end if
+      end do
+      allocate (rp2(ndata - n))
+      ! get all the others indices for the complete path
+      n = 0
+      m = 0
+      do i = 1, ndata
+         if (any(rp1s .eq. i)) then
+            n = n + 1
+            seeded(rp1s(n), ireal) = 1
+            cycle
+         else
+            m = m + 1
+            rp2(m) = i
+         end if
+      end do
+
+      if (idbg .gt. 1) then
+         write (*, *) "seeding", n, "locations above the", qfp, "quantile"
+      end if
+
+      ! data above threshold are simulated first
+      call shuffle(rp1s) ! sparse seed locations > threhshold
+      call shuffle(rp2) ! every other data location
+      randpath(1:n) = rp1s
+      randpath(n + 1:ndata) = rp2
+
+      ! setup upper/lower thresholds for constrained imputation
+      ! constraints only apply to the factor with precedence at seed locations
+      do i = 1, n
+         if (var(rp1s(i)) .gt. tfp) lb(rp1s(i)) = tfp
+         if (var(i) .lt. tfp) ub(i) = tfp
+      end do
+
+      ! deallocate arrays as size may change across realizations
+      deallocate (rp1, rp1_r, tvar, txyz)
+      deallocate (tseed, exclude, nnresults)
+
+   end subroutine semirandom_path
 
    subroutine krige(vm, coords, rhs, lhs, kwts, nuse, useidx, &
                     sim, simidx, cmean, cstdev)
@@ -724,6 +869,9 @@ contains
       ! set search boundaries
       m = y(1, idx) - dy
       n = y(1, idx) + dy
+
+      if (m .lt. gmin) m = gmin
+      if (n .gt. gmax) n = gmax
 
       ! check lower bound
       ytmp = y
@@ -1007,8 +1155,10 @@ contains
 
          if (dp(i) .gt. dn(j)) then
             y(1, fidx(i)) = y(1, fidx(i)) + dy
+            if (y(1, fidx(i)) .gt. gmax) y(1, fidx(i)) = gmax
          else
             y(1, fidx(j)) = y(1, fidx(j)) - dy
+            if (y(1, fidx(j)) .lt. gmin) y(1, fidx(j)) = gmin
          end if
 
       else if (updn .eq. 1) then
@@ -1031,8 +1181,10 @@ contains
 
          if (dp(i) .lt. dn(j)) then
             y(1, fidx(i)) = y(1, fidx(i)) + dy
+            if (y(1, fidx(i)) .gt. gmax) y(1, fidx(i)) = gmax
          else
             y(1, fidx(j)) = y(1, fidx(j)) - dy
+            if (y(1, fidx(j)) .lt. gmin) y(1, fidx(j)) = gmin
          end if
 
       end if
