@@ -23,7 +23,8 @@ module geostat
    real(8), allocatable :: sim(:, :) ! (ndata, nfact)
    real(8), allocatable :: anisxyz(:, :)
    real(8), allocatable :: abratio(:, :) ! (ndata, nreals)
-   integer, allocatable :: rp1(:), rp2(:), randpath(:)
+   integer, allocatable :: rp1(:), rp2(:), rp1s(:), randpath(:)
+   real(8), allocatable :: rp1_r(:) ! rand path 1 as reals for sorting
    integer, allocatable :: rsc(:, :) ! resim count
    integer :: nsearch
    integer :: nreals
@@ -45,10 +46,6 @@ module geostat
    real(8) :: usnsref(nsamp)
    real(8) :: minref, maxref
    real(8) :: gmin, gmax
-
-   ! dynamic tolerances
-   real(8), allocatable :: vsort(:), wsort(:), vord(:)
-   real(8), allocatable :: vcdf(:)
 
    ! kdtree required variables
    type(kdtrees), allocatable :: trees(:) ! array of pointers
@@ -79,6 +76,8 @@ module geostat
    real(8), allocatable :: sigwt(:) ! sigmoid weighting factor
    real(8) :: qfp, tfp ! quantile and threshold for factor with preference
    real(8), allocatable :: ub(:), lb(:)
+   real(8) :: sr ! exclution radius for seeding
+   integer, allocatable :: seeded(:, :) ! (ndata, nreals)
 
    ! output file
    integer :: lout, ldbg, lmom
