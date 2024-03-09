@@ -179,12 +179,30 @@ contains
       call chknam(nnwtsfile, 256)
       write (*, "(2a)") '  output file: ', trim(adjustl(nnwtsfile))
 
-      ! threshold
-      read (lin, *, iostat=test) qfp
+      ! factor precedence
+      ifp = .false.
+      read (lin, *, iostat=test) tmp
       if (test .ne. 0) stop "ERROR in parameter file"
-      write (*, *) ' quantile to threshold factor with preference: ', qfp
-      call gauinv(qfp, tfp, ierr)
-      write (*, *) ' Gaussian threshold value: ', tfp
+      if (tmp .gt. 0) ifp = .true.
+      write (*, *) "consider factor precedence?", ifp
+
+      ! threshold
+      isd = .false.
+      read (lin, *, iostat=test) tmp, qfp
+      if (test .ne. 0) stop "ERROR in parameter file"
+      if (tmp .gt. 0) isd = .true.
+      if (isd .and. .not. ifp) then
+         write (*, *) ""
+         write (*, *) "seeding only applies if factor precedence = 1"
+         write (*, *) " resetting iseed to 0"
+         write (*, *) ""
+         isd = .false.
+      end if
+      if (isd) then
+         write (*, *) ' quantile to threshold factor with preference: ', qfp
+         call gauinv(qfp, tfp, ierr)
+         write (*, *) ' Gaussian threshold value: ', tfp
+      end if
 
       ! exclusion radius
       read (lin, *, iostat=test) sr
@@ -354,9 +372,11 @@ contains
       call vector_to_matrices(nnwts(1:2*L), nnet)
 
       ! allocate precedence arrays
-      allocate (fprec(L), sigwt(L))
-      fprec = nnwts(2*L + 1:3*L)
-      sigwt = nnwts(3*L + 1:4*L)
+      if (ifp) then
+         allocate (fprec(L), sigwt(L))
+         fprec = nnwts(2*L + 1:3*L)
+         sigwt = nnwts(3*L + 1:4*L)
+      end if
 
       ! start reading Gaussian pool file
       write (*, *) " "

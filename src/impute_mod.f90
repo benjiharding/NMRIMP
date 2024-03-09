@@ -3,7 +3,7 @@ module impute_mod
    use geostat
    use kdtree2_module
    use mtmod, only: grnd
-   use network_mod, only: network_forward
+   use network_mod, only: network_forward, network_forward2
    use types_mod, only: variogram, network, kdtrees
    use vario_mod, only: set_sill, set_rotmatrix, gammabar
    use covasubs, only: get_cov
@@ -174,10 +174,12 @@ contains
       end do
 
       ! sort precedence array for indexing
-      fidx = [(i, i=1, ngvarg + 1)]
-      fprec_r = fprec
-      call sortem(1, ngvarg + 1, fprec_r, 1, fidx, fidx, fidx, fidx, &
-                  fidx, fidx, fidx, fidx)
+      if (ifp) then
+         fidx = [(i, i=1, ngvarg + 1)]
+         fprec_r = fprec
+         call sortem(1, ngvarg + 1, fprec_r, 1, fidx, fidx, fidx, fidx, &
+                     fidx, fidx, fidx, fidx)
+      end if
 
    end subroutine init_imputer
 
@@ -240,11 +242,16 @@ contains
       ! reset resim counter every realization
       nr = 0
 
-      ! deallocate the previous path as size may change
-      if (allocated(rp1s)) deallocate (rp1s, rp2)
-
-      ! get the semi-random path for this iteration
-      call semirandom_path(ireal)
+      ! get the semi-random or random path for this iteration
+      if (isd) then
+         ! deallocate the previous path as size may change
+         if (allocated(rp1s)) deallocate (rp1, rp1s, rp2)
+         call semirandom_path(ireal)
+      else
+         ! true random path
+         randpath = [(i, i=1, ndata)]
+         call shuffle(randpath)
+      end if
 
       !
       ! loop over data locations
@@ -339,29 +346,37 @@ contains
             ! simulate each factor at this simidx
             do j = 1, ngvarg + 1
 
-               ! impute in order of precedence
-               igv = fidx(j)
-
-               ! accept/reject based on threshold
-               ! this only applies to factor with precedence
-               if (j .eq. 1) then
-                  p = grnd()
-                  call gauinv(p, xp, ierr)
-                  simt = xp*cstdevs(igv) + cmeans(igv)
-                  jj = 0
-                  do while ((simt .lt. lb(simidx)) .or. &
-                            (simt .gt. ub(simidx)))
-                     jj = jj + 1
+               if (ifp .and. isd) then
+                  ! impute in order of precedence
+                  igv = fidx(j)
+                  ! accept/reject based on threshold
+                  ! this only applies to factor with precedence
+                  if (j .eq. 1) then
                      p = grnd()
                      call gauinv(p, xp, ierr)
                      simt = xp*cstdevs(igv) + cmeans(igv)
-                     if (jj .gt. 1000) then
-                        ! write (*, *) "Stuck in coarse resim!"
-                        exit
-                     end if
-                  end do
-                  sim(simidx, igv) = simt
+                     jj = 0
+                     ! enforce the constraints
+                     do while ((simt .lt. lb(simidx)) .or. &
+                               (simt .gt. ub(simidx)))
+                        jj = jj + 1
+                        p = grnd()
+                        call gauinv(p, xp, ierr)
+                        simt = xp*cstdevs(igv) + cmeans(igv)
+                        if (jj .gt. 1000) then
+                           ! write (*, *) "Stuck in coarse resim!"
+                           exit
+                        end if
+                     end do
+                     sim(simidx, igv) = simt
+                  else
+                     p = grnd()
+                     call gauinv(p, xp, ierr)
+                     sim(simidx, igv) = xp*cstdevs(igv) + cmeans(igv)
+                  end if
                else
+                  ! no precedence
+                  igv = j
                   p = grnd()
                   call gauinv(p, xp, ierr)
                   sim(simidx, igv) = xp*cstdevs(igv) + cmeans(igv)
@@ -391,14 +406,6 @@ contains
                if (idbg .gt. 1) then
                   write (*, *) "coarse search did not converge after", iter1, &
                      "iterations at data index", simidx, "diff=", diff1
-
-                  ! do j = 1, nfact
-                  !    write (*, *) cmeans(j), cstdevs(j)
-                  ! end do
-
-                  ! write (*, *) " "
-                  ! write (*, *) yimp1
-                  ! write (*, *) " "
                end if
                exit
             end if
@@ -415,33 +422,43 @@ contains
          !
          if (diff1 .ge. tol1) then
 
-            ! only reset the non-seeded locations
-            if (any(rp2 .eq. simidx)) then
+            ! dont reset the seeded locations
+            if (isd) then
+               if (any(rp2 .eq. simidx)) then
+                  ! track number of reset locations
+                  nr = nr + 1
+                  rsc(simidx, ireal) = rsc(simidx, ireal) + 1
+                  ! get neighbouring indices to reset
+                  do j = 1, nreset
+                     reset_idx(j) = results(j)%idx
+                  end do
+                  ! track data indices so we can revisit them
+                  que((nr - 1)*nreset + 1:nr*nreset) = reset_idx
+               end if
 
+            else
                ! track number of reset locations
                nr = nr + 1
                rsc(simidx, ireal) = rsc(simidx, ireal) + 1
-
                ! get neighbouring indices to reset
                do j = 1, nreset
                   reset_idx(j) = results(j)%idx
                end do
-
                ! track data indices so we can revisit them
                que((nr - 1)*nreset + 1:nr*nreset) = reset_idx
-
-               ! cycle to start a new iteration of DATALOOP
-               if (.not. present(irs)) cycle
-
-               ! are we resimulating?
-               if (present(irs)) then
-                  ! cycle to start a new iteration of DATALOOP unless
-                  ! we are on the last resim iteration
-                  if (irs .lt. MAXRESIM) cycle
-               end if
-               rsc(simidx, ireal) = rsc(simidx, ireal) - 1
-
             end if
+
+            ! cycle to start a new iteration of DATALOOP
+            if (.not. present(irs)) cycle
+
+            ! are we resimulating?
+            if (present(irs)) then
+               ! cycle to start a new iteration of DATALOOP unless
+               ! we are on the last resim iteration
+               if (irs .lt. MAXRESIM) cycle
+            end if
+            rsc(simidx, ireal) = rsc(simidx, ireal) - 1
+
          end if
 
          !
@@ -467,7 +484,7 @@ contains
 
             ! get the direction we need to move and factor sensitivities
             dz = var(simidx) - zimp2
-            call latent_sensitivity(zimp2, yimp2, dz, dp, dn, &
+            call latent_sensitivity(zimp2, yimp2, dz, dp, dn, simidx, &
                                     didx, a, dy, inv)
             ! track the final ratio
             ab = a/abs(dz)
@@ -579,7 +596,7 @@ contains
 
       end do DATALOOP
 
-      ! grab the resim indices from the que array if required
+      ! get the resim indices from the que array if required
       nresim = nr
       if (nr .gt. 0) then
          allocate (rsidxs(nr*nreset))
@@ -699,7 +716,7 @@ contains
       end do
 
       ! deallocate arrays as size may change across realizations
-      deallocate (rp1, rp1_r, tvar, txyz)
+      deallocate (rp1_r, tvar, txyz)
       deallocate (tseed, exclude, nnresults)
 
    end subroutine semirandom_path
@@ -751,7 +768,7 @@ contains
 
    end subroutine krige
 
-   subroutine latent_sensitivity(z, y, dz, dp, dn, didx, a, dy, inv)
+   subroutine latent_sensitivity(z, y, dz, dp, dn, sidx, didx, a, dy, inv)
 
       !
       ! determine what latent factors have the greatest
@@ -763,6 +780,7 @@ contains
       real(8), intent(in) :: y(:, :) ! latent vector
       real(8), intent(in) :: dz ! current delta with observed
       real(8), intent(inout) :: dp(:), dn(:)
+      integer, intent(in) :: sidx ! simidx
       integer, intent(out) :: didx(:) ! sorted delta z
       real(8), intent(out) :: a ! measure of in/out tols
       real(8), intent(out) :: dy ! delta y
@@ -772,13 +790,13 @@ contains
       real(8) :: d(ngvarg + 1)
       real(8) :: ytmp(size(y, dim=1), size(y, dim=2))
       real(8) :: yy(size(y, dim=1), size(y, dim=2))
-      real(8) :: y1, y2, p, xp, zz
+      real(8) :: y1, y2, zt
       real(8) :: b, c
-      real(8) :: fidx(ngvarg + 1)
-      integer :: i, igv, ierr
+      real(8) :: ffidx(ngvarg + 1)
+      integer :: i, ierr
 
       ! factor indices
-      fidx = [(i, i=1, ngvarg + 1)]
+      ffidx = [(i, i=1, ngvarg + 1)]
 
       ! maximum step size in probability space
       call gauinv(0.5d000, y1, ierr)
@@ -796,11 +814,19 @@ contains
       do i = 1, ngvarg + 1 ! exclude the nugget here? should always be least sensitive.
          ytmp = y
          ytmp(1, i) = ytmp(1, i) - dy
-         dn(i) = z - f(ytmp)
+         zt = f(ytmp)
+         dn(i) = z - zt
          ytmp(1, i) = ytmp(1, i) + dy*2.d0 ! revert back to zero plus dy
-         dp(i) = z - f(ytmp)
+         zt = f(ytmp)
+         dp(i) = z - zt
          if (dn(i) .lt. 0.d0) inv(i) = .true.
       end do
+
+      ! ! set sensitivity of seeded values to zero to prevent polishing
+      ! if (any(rp1 .eq. sidx)) then
+      !    dn(int(fidx(1))) = 0.d0
+      !    dp(int(fidx(1))) = 0.d0
+      ! end if
 
       ! catch edge cases where dp/dn are all the same sign
       ! use a larger/smaller perturbation?
@@ -841,8 +867,8 @@ contains
 
       ! sort indices by delta - least to most sensitive
       d = abs(dp - dn)
-      call sortem(1, ngvarg, d, 3, fidx, dp, dn, d, d, d, d, d)
-      didx = fidx
+      call sortem(1, ngvarg, d, 3, ffidx, dp, dn, d, d, d, d, d)
+      didx = ffidx
 
    end subroutine latent_sensitivity
 
@@ -954,8 +980,12 @@ contains
       end do
 
       ! calculate the corresponding z values
-      call network_forward(nnet, yref, zref, nstrans=.false., fprec=fprec, &
-                           sigwt=sigwt)
+      if (ifp) then
+         call network_forward2(nnet, yref, zref, nstrans=.false., fprec=fprec, &
+                               sigwt=sigwt)
+      else
+         call network_forward(nnet, yref, zref, nstrans=.false.)
+      end if
 
       ! normal score to build transform table
       do i = 1, nsamp
@@ -1243,8 +1273,12 @@ contains
       real(8), intent(in) :: y(:, :)
       real(8) :: zz(1), z
 
-      call network_forward(nnet, y, zz, nstrans=.false., fprec=fprec, &
-                           sigwt=sigwt)
+      if (ifp) then
+         call network_forward2(nnet, y, zz, nstrans=.false., fprec=fprec, &
+                               sigwt=sigwt)
+      else
+         call network_forward(nnet, y, zz, nstrans=.false.)
+      end if
       call transform_to_refcdf(zz(1), zref, nsref, zz(1))
       z = zz(1)
 
@@ -1257,8 +1291,12 @@ contains
       real(8), intent(in) :: y(:, :)
       real(8) :: aa(1), a
 
-      call network_forward(nnet, y, aa, nstrans=.false., fprec=fprec, &
-                           sigwt=sigwt)
+      if (ifp) then
+         call network_forward2(nnet, y, aa, nstrans=.false., fprec=fprec, &
+                               sigwt=sigwt)
+      else
+         call network_forward(nnet, y, aa, nstrans=.false.)
+      end if
       a = aa(1)
 
    end function nmr

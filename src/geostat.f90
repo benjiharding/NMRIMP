@@ -78,6 +78,7 @@ module geostat
    real(8), allocatable :: ub(:), lb(:)
    real(8) :: sr ! exclution radius for seeding
    integer, allocatable :: seeded(:, :) ! (ndata, nreals)
+   logical :: isd, ifp
 
    ! output file
    integer :: lout, ldbg, lmom

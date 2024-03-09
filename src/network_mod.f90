@@ -1,6 +1,6 @@
 module network_mod
 
-   use geostat, only: var, nnet, wts, ndata, ngvarg, nsamp, fprec, sigwt
+   use geostat
    use types_mod, only: network
    use subs, only: nscore, powint, locate, sortem
    use mtmod, only: grnd
@@ -260,40 +260,40 @@ contains
 
    ! end subroutine network_forward
 
-   ! subroutine network_forward(net, Ymat, AL, nstrans, ttable)
+   subroutine network_forward(net, Ymat, AL, nstrans, ttable)
 
-   !    ! parameters
-   !    type(network), intent(inout) :: net ! neural network object
-   !    real(8), intent(in) :: Ymat(:, :) ! simulated factors
-   !    logical, intent(in) :: nstrans ! nscore transform flag
-   !    real(8), optional :: ttable(:, :) ! transform table
+      ! parameters
+      type(network), intent(inout) :: net ! neural network object
+      real(8), intent(in) :: Ymat(:, :) ! simulated factors
+      logical, intent(in) :: nstrans ! nscore transform flag
+      real(8), optional :: ttable(:, :) ! transform table
 
-   !    ! return
-   !    real(8), intent(inout) :: AL(:) ! output mixture vector
+      ! return
+      real(8), intent(inout) :: AL(:) ! output mixture vector
 
-   !    ! locals
-   !    real(8), allocatable :: Amat(:, :), ZL(:, :)
-   !    integer :: i
+      ! locals
+      real(8), allocatable :: Amat(:, :), ZL(:, :)
+      integer :: i
 
-   !    ! forward pass; assumes single layer network
-   !    Amat = Ymat
-   !    do i = 1, net%ld(1)
-   !       Amat(:, i) = power(Ymat(:, i), net%omega(i))
-   !    end do
-   !    ZL = matmul(Amat, transpose(net%awts))
-   !    AL = ZL(:, 1)
+      ! forward pass; assumes single layer network
+      Amat = Ymat
+      do i = 1, net%ld(1)
+         Amat(:, i) = power(Ymat(:, i), net%omega(i), 1.d0)
+      end do
+      ZL = matmul(Amat, transpose(net%awts))
+      AL = ZL(:, 1)
 
-   !    ! random despike and normal score transform
-   !    if (nstrans) then
-   !       do i = 1, ndata
-   !          AL(i) = AL(i) + grnd()*SMALLDBLE
-   !          call transform_to_refcdf(AL(i), ttable, AL(i), nsamp)
-   !       end do
-   !    end if
+      ! random despike and normal score transform
+      if (nstrans) then
+         do i = 1, ndata
+            AL(i) = AL(i) + grnd()*SMALLDBLE
+            call transform_to_refcdf(AL(i), ttable, AL(i), nsamp)
+         end do
+      end if
 
-   ! end subroutine network_forward
+   end subroutine network_forward
 
-   subroutine network_forward(net, Ymat, AL, nstrans, fprec, sigwt, ttable)
+   subroutine network_forward2(net, Ymat, AL, nstrans, fprec, sigwt, ttable)
 
       ! parameters
       type(network), intent(inout) :: net ! neural network object
@@ -330,7 +330,7 @@ contains
          end do
       end if
 
-   end subroutine network_forward
+   end subroutine network_forward2
 
    subroutine build_refcdf(nsamp, yref, net, ttable)
 
@@ -354,8 +354,12 @@ contains
       wt = 1.d0
 
       ! calculate the corresponding z values
-      call network_forward(net, yref, zref, nstrans=.false., fprec=fprec, &
-                           sigwt=sigwt)
+      if (ifp) then
+         call network_forward2(net, yref, zref, nstrans=.false., fprec=fprec, &
+                               sigwt=sigwt)
+      else
+         call network_forward(net, yref, zref, nstrans=.false.)
+      end if
 
       ! normal score to build transform table
       do i = 1, nsamp
