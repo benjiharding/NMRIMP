@@ -173,13 +173,18 @@ contains
                                            sort=.true., rearrange=.true.)
       end do
 
-      ! sort precedence array for indexing
-      if (ifp) then
-         fidx = [(i, i=1, ngvarg + 1)]
-         fprec_r = fprec
-         call sortem(1, ngvarg + 1, fprec_r, 1, fidx, fidx, fidx, fidx, &
-                     fidx, fidx, fidx, fidx)
+      if (isd) then
+         call semirandom_path(1)
+         write (*, *) "Seeding", size(rp1s), "locations above the", qfp, "quantile"
       end if
+
+      ! ! sort precedence array for indexing
+      ! if (ifp) then
+      !    fidx = [(i, i=1, ngvarg + 1)]
+      !    fprec_r = fprec
+      !    call sortem(1, ngvarg + 1, fprec_r, 1, fidx, fidx, fidx, fidx, &
+      !                fidx, fidx, fidx, fidx)
+      ! end if
 
    end subroutine init_imputer
 
@@ -344,14 +349,13 @@ contains
             k1 = k1 + 1
 
             ! simulate each factor at this simidx
-            do j = 1, ngvarg + 1
+            do igv = 1, ngvarg + 1
 
-               if (ifp .and. isd) then
-                  ! impute in order of precedence
-                  igv = fidx(j)
+               ! impute with constraints
+               if (isd) then
                   ! accept/reject based on threshold
-                  ! this only applies to factor with precedence
-                  if (j .eq. 1) then
+                  ! this only applies to seeded factor
+                  if (igv .eq. sdid) then
                      p = grnd()
                      call gauinv(p, xp, ierr)
                      simt = xp*cstdevs(igv) + cmeans(igv)
@@ -363,10 +367,7 @@ contains
                         p = grnd()
                         call gauinv(p, xp, ierr)
                         simt = xp*cstdevs(igv) + cmeans(igv)
-                        if (jj .gt. 1000) then
-                           ! write (*, *) "Stuck in coarse resim!"
-                           exit
-                        end if
+                        if (jj .gt. 10000) exit
                      end do
                      sim(simidx, igv) = simt
                   else
@@ -375,27 +376,29 @@ contains
                      sim(simidx, igv) = xp*cstdevs(igv) + cmeans(igv)
                   end if
                else
-                  ! no precedence
-                  igv = j
+                  ! no constraints
                   p = grnd()
                   call gauinv(p, xp, ierr)
                   sim(simidx, igv) = xp*cstdevs(igv) + cmeans(igv)
                end if
 
                ! enforce reasonable min/max Gaussian values
+               jj = 0
                do while ((sim(simidx, igv) .lt. gmin) .or. &
                          (sim(simidx, igv) .gt. gmax))
                   ! resimulate if necessary
+                  jj = jj + 1
                   p = grnd()
                   call gauinv(p, xp, ierr)
                   sim(simidx, igv) = xp*cstdevs(igv) + cmeans(igv)
+                  if (jj .gt. 10000) exit
                end do
 
             end do
 
             ! calculate observed value for this y vector
             yimp1 = reshape(sim(simidx, :), shape=[1, nfact]) ! reshape to preserve first dim
-            zimp1 = f(yimp1)
+            zimp1 = f(yimp1) ! precedence captured here
             diff1 = abs(zimp1 - var(simidx))
 
             ! check for funky behaviour that will cause stress
@@ -405,7 +408,7 @@ contains
             if (k1 .ge. iter1) then
                if (idbg .gt. 1) then
                   write (*, *) "coarse search did not converge after", iter1, &
-                     "iterations at data index", simidx, "diff=", diff1
+                     "iterations at data index", simidx, "delta =", diff1
                end if
                exit
             end if
@@ -413,7 +416,7 @@ contains
          end do COARSE
 
          ! update conditioning array with intial coarse values
-         zinit(simidx, ireal) = nmr(yimp1)
+         zinit(simidx, ireal) = nmr(yimp1) ! precedence captured here
          sim(simidx, :) = yimp1(1, :)
 
          !
@@ -578,7 +581,7 @@ contains
          !
          ! update the conditioning values for this realization
          !
-         zinit(simidx, ireal) = nmr(yimp2)
+         zinit(simidx, ireal) = nmr(yimp2) ! precedence captured here
          sim(simidx, :) = yimp2(1, :)
 
          !
@@ -698,9 +701,9 @@ contains
          end if
       end do
 
-      if (idbg .gt. 1) then
-         write (*, *) "seeding", n, "locations above the", qfp, "quantile"
-      end if
+      ! if (idbg .gt. 1) then
+      !    write (*, *) "seeding", n, "locations above the", qfp, "quantile"
+      ! end if
 
       ! data above threshold are simulated first
       call shuffle(rp1s) ! sparse seed locations > threhshold
@@ -981,8 +984,8 @@ contains
 
       ! calculate the corresponding z values
       if (ifp) then
-         call network_forward2(nnet, yref, zref, nstrans=.false., fprec=fprec, &
-                               sigwt=sigwt)
+         call network_forward2(nnet, yref, zref, nstrans=.false., fp=fpid, &
+                               sigwt=fpwt)
       else
          call network_forward(nnet, yref, zref, nstrans=.false.)
       end if
@@ -1274,8 +1277,8 @@ contains
       real(8) :: zz(1), z
 
       if (ifp) then
-         call network_forward2(nnet, y, zz, nstrans=.false., fprec=fprec, &
-                               sigwt=sigwt)
+         call network_forward2(nnet, y, zz, nstrans=.false., fp=fpid, &
+                               sigwt=fpwt)
       else
          call network_forward(nnet, y, zz, nstrans=.false.)
       end if
@@ -1292,8 +1295,8 @@ contains
       real(8) :: aa(1), a
 
       if (ifp) then
-         call network_forward2(nnet, y, aa, nstrans=.false., fprec=fprec, &
-                               sigwt=sigwt)
+         call network_forward2(nnet, y, aa, nstrans=.false., fp=fpid, &
+                               sigwt=fpwt)
       else
          call network_forward(nnet, y, aa, nstrans=.false.)
       end if

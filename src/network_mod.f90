@@ -293,14 +293,14 @@ contains
 
    end subroutine network_forward
 
-   subroutine network_forward2(net, Ymat, AL, nstrans, fprec, sigwt, ttable)
+   subroutine network_forward2(net, Ymat, AL, nstrans, fp, sigwt, ttable)
 
       ! parameters
       type(network), intent(inout) :: net ! neural network object
       real(8), intent(in) :: Ymat(:, :) ! simulated factors
       logical, intent(in) :: nstrans ! nscore transform flag
-      integer, intent(in) :: fprec(:) ! factor precedence
-      real(8), intent(in) :: sigwt(:) ! sigmoid weight
+      integer, intent(in) :: fp ! factor precedence
+      real(8), intent(in) :: sigwt ! sigmoid weight
       real(8), optional :: ttable(:, :) ! transform table
 
       ! return
@@ -308,18 +308,16 @@ contains
 
       ! locals
       real(8), allocatable :: fw(:)
-      integer :: i, j, fp
+      integer :: i
 
       ! weight factor with highest precedence
-      fp = minloc(fprec, dim=1)
-      fw = sigmoid1d(Ymat(:, fp)*sigwt(fp))
+      fw = sigmoid1d(Ymat(:, fp)*sigwt)
       AL = net%awts(1, fp)*power(Ymat(:, fp), net%omega(fp), 1.d0)
 
       ! forward pass through remaining factors
       do i = 1, net%ld(1)
-         j = fprec(i)
-         if (j .eq. fp) cycle
-         AL = AL + net%awts(1, j)*power(Ymat(:, j), net%omega(j), 1.d0)*fw
+         if (i .eq. fp) cycle
+         AL = AL + net%awts(1, i)*power(Ymat(:, i), net%omega(i), 1.d0)*fw
       end do
 
       ! random despike and normal score transform
@@ -355,8 +353,8 @@ contains
 
       ! calculate the corresponding z values
       if (ifp) then
-         call network_forward2(net, yref, zref, nstrans=.false., fprec=fprec, &
-                               sigwt=sigwt)
+         call network_forward2(net, yref, zref, nstrans=.false., fp=fpid, &
+                               sigwt=fpwt)
       else
          call network_forward(net, yref, zref, nstrans=.false.)
       end if

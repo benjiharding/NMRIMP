@@ -109,7 +109,7 @@ contains
       ! number of  reals
       read (lin, *, iostat=test) nreals
       if (test .ne. 0) stop "ERROR in parameter file"
-      write (*, *) ' number of unconditional realizations: ', nreals
+      write (*, *) ' number of realizations to impute: ', nreals
 
       ! random number seed
       read (lin, *, iostat=test) rseed
@@ -181,23 +181,17 @@ contains
 
       ! factor precedence
       ifp = .false.
-      read (lin, *, iostat=test) tmp
+      read (lin, *, iostat=test) tmp, fpid, fpwt
       if (test .ne. 0) stop "ERROR in parameter file"
       if (tmp .gt. 0) ifp = .true.
       write (*, *) "consider factor precedence?", ifp
+      write (*, *) "factor index and weight", fpid, fpwt
 
       ! threshold
       isd = .false.
-      read (lin, *, iostat=test) tmp, qfp
+      read (lin, *, iostat=test) tmp, qfp, sdid
       if (test .ne. 0) stop "ERROR in parameter file"
       if (tmp .gt. 0) isd = .true.
-      if (isd .and. .not. ifp) then
-         write (*, *) ""
-         write (*, *) "seeding only applies if factor precedence = 1"
-         write (*, *) " resetting iseed to 0"
-         write (*, *) ""
-         isd = .false.
-      end if
       if (isd) then
          write (*, *) ' quantile to threshold factor with preference: ', qfp
          call gauinv(qfp, tfp, ierr)
@@ -371,12 +365,12 @@ contains
       L = nnet%ld(1)
       call vector_to_matrices(nnwts(1:2*L), nnet)
 
-      ! allocate precedence arrays
-      if (ifp) then
-         allocate (fprec(L), sigwt(L))
-         fprec = nnwts(2*L + 1:3*L)
-         sigwt = nnwts(3*L + 1:4*L)
-      end if
+      ! ! allocate precedence arrays
+      ! if (ifp) then
+      !    allocate (fprec(L), sigwt(L))
+      !    fprec = nnwts(2*L + 1:3*L)
+      !    sigwt = nnwts(3*L + 1:4*L)
+      ! end if
 
       ! start reading Gaussian pool file
       write (*, *) " "

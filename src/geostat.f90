@@ -80,6 +80,9 @@ module geostat
    integer, allocatable :: seeded(:, :) ! (ndata, nreals)
    logical :: isd, ifp
 
+   integer :: fpid, sdid
+   real(8) :: fpwt
+
    ! output file
    integer :: lout, ldbg, lmom
 
