@@ -11,7 +11,7 @@ program main
    ! generated with NMROPT.
    !
    ! Author: Ben Harding
-   ! Date: June 2023
+   ! Date: May 2024
    ! Location: Centre for Computational Geostatistics,
    ! University of Alberta, Edmonton, Canada
    ! Contact: bharding@ualberta.ca
